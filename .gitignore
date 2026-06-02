@@ -1,0 +1,38 @@
+# Planning/reference docs are kept local for this build process.
+docs/
+
+# macOS
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Node / frontend
+node_modules/
+dist/
+coverage/
+.vite/
+
+# Java / Gradle
+.gradle/
+build/
+target/
+out/
+*.class
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Docker/local runtime
+docker-data/
