@@ -19,12 +19,12 @@ import { getHealth, logout } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const navItems = [
-  { to: '/today', label: 'Today', icon: CalendarDays },
-  { to: '/scope', label: 'Scope', icon: Target },
-  { to: '/review/session', label: 'Session', icon: BookOpenCheck },
-  { to: '/projects', label: 'Projects', icon: FolderKanban },
-  { to: '/progress', label: 'Progress', icon: Gauge },
-  { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/today', label: '今日复习', icon: CalendarDays },
+  { to: '/scope', label: '范围管理', icon: Target },
+  { to: '/review/session', label: '复习会话', icon: BookOpenCheck },
+  { to: '/projects', label: '项目深挖', icon: FolderKanban },
+  { to: '/progress', label: '复习进度', icon: Gauge },
+  { to: '/settings', label: '设置', icon: Settings },
 ]
 
 export function AppLayout() {
@@ -58,7 +58,7 @@ export function AppLayout() {
             <div className="text-sm font-semibold text-slate-950">
               Java Review
             </div>
-            <div className="text-xs text-slate-500">Interview workbench</div>
+            <div className="text-xs text-slate-500">面试复习工作台</div>
           </div>
         </div>
 
@@ -95,14 +95,14 @@ export function AppLayout() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="text-sm font-semibold text-slate-950">
-                Review console
+                复习控制台
               </div>
               <div className="text-xs text-slate-500">
                 {healthQuery.isError
-                  ? 'Backend health check failed'
+                  ? '后端健康检查失败'
                   : currentUser
                     ? `${currentUser.displayName} · ${currentUser.role}`
-                    : 'Authenticated workspace'}
+                    : '已登录工作台'}
               </div>
             </div>
             <div className="flex min-w-0 items-center gap-3">
@@ -123,7 +123,7 @@ export function AppLayout() {
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <LogOut className="size-4" aria-hidden="true" />
-                {logoutMutation.isPending ? 'Logging out...' : 'Logout'}
+                {logoutMutation.isPending ? '退出中...' : '退出'}
               </button>
             </div>
           </div>

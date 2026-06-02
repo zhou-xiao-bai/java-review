@@ -1,0 +1,67 @@
+package com.javareview.today;
+
+import java.util.UUID;
+
+import jakarta.validation.Valid;
+
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.javareview.auth.AuthService;
+import com.javareview.auth.User;
+import com.javareview.today.TodayDtos.CreateManualTaskRequest;
+import com.javareview.today.TodayDtos.ReviewTaskResponse;
+import com.javareview.today.TodayDtos.TodayPlanResponse;
+
+@RestController
+@RequestMapping("/api")
+public class TodayController {
+
+	private final TodayPlanService todayPlanService;
+	private final AuthService authService;
+
+	public TodayController(TodayPlanService todayPlanService, AuthService authService) {
+		this.todayPlanService = todayPlanService;
+		this.authService = authService;
+	}
+
+	@GetMapping("/today")
+	public TodayPlanResponse getToday(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal) {
+		return todayPlanService.getToday(currentUser(principal));
+	}
+
+	@PostMapping("/today/generate")
+	public TodayPlanResponse generateToday(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal) {
+		return todayPlanService.generateToday(currentUser(principal));
+	}
+
+	@PostMapping("/today/manual-tasks")
+	public ReviewTaskResponse createManualTask(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,
+			@Valid @RequestBody CreateManualTaskRequest request) {
+		return todayPlanService.createManualTask(currentUser(principal), request);
+	}
+
+	@PatchMapping("/review-tasks/{id}/skip")
+	public ReviewTaskResponse skipTask(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,
+			@PathVariable UUID id) {
+		return todayPlanService.skipTask(currentUser(principal), id);
+	}
+
+	private User currentUser(org.springframework.security.core.userdetails.User principal) {
+		if (principal == null) {
+			throw new BadCredentialsException("Not authenticated.");
+		}
+		return authService.requireUserByIdentifier(principal.getUsername());
+	}
+}

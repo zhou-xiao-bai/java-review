@@ -202,3 +202,82 @@ export function initializeTopicPoints(id: string) {
     method: 'POST',
   })
 }
+
+export type SummaryMetric = {
+  count: number
+  minutes: number
+}
+
+export type TodaySummary = {
+  carryOver: SummaryMetric
+  due: SummaryMetric
+  newExpansion: SummaryMetric
+  manual: SummaryMetric
+}
+
+export type ReviewTask = {
+  id: string
+  reviewPointId: string | null
+  topicId: string | null
+  topicTitle: string | null
+  domainName: string | null
+  pointTitle: string | null
+  manualPrompt: string | null
+  date: string
+  type: 'carry_over' | 'due' | 'new' | 'manual' | string
+  typeLabel: string
+  status: 'pending' | 'in_progress' | 'completed' | 'skipped' | string
+  statusLabel: string
+  priorityScore: number
+  estimatedMinutes: number
+  dueStatus: string
+  nextReviewAt: string | null
+  createdAt: string | null
+  completedAt: string | null
+}
+
+export type ReviewTaskGroup = {
+  type: ReviewTask['type']
+  label: string
+  count: number
+  scheduledMinutes: number
+  tasks: ReviewTask[]
+}
+
+export type TodayPlan = {
+  date: string
+  capacityMinutes: number
+  scheduledMinutes: number
+  completedMinutes: number
+  remainingMinutes: number
+  summary: TodaySummary
+  groups: ReviewTaskGroup[]
+}
+
+export type CreateManualTaskRequest = {
+  prompt: string
+  estimatedMinutes?: number
+}
+
+export function getToday() {
+  return apiRequest<TodayPlan>('/api/today')
+}
+
+export function generateToday() {
+  return apiRequest<TodayPlan>('/api/today/generate', {
+    method: 'POST',
+  })
+}
+
+export function createManualTask(body: CreateManualTaskRequest) {
+  return apiRequest<ReviewTask>('/api/today/manual-tasks', {
+    method: 'POST',
+    body,
+  })
+}
+
+export function skipReviewTask(id: string) {
+  return apiRequest<ReviewTask>(`/api/review-tasks/${id}/skip`, {
+    method: 'PATCH',
+  })
+}

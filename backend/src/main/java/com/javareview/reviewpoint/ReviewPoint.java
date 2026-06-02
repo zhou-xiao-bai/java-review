@@ -145,11 +145,42 @@ public class ReviewPoint {
 		return status;
 	}
 
+	public Instant getLastReviewedAt() {
+		return lastReviewedAt;
+	}
+
 	public Instant getNextReviewAt() {
 		return nextReviewAt;
 	}
 
+	public int getReviewCount() {
+		return reviewCount;
+	}
+
+	public int getWrongCount() {
+		return wrongCount;
+	}
+
 	public List<String> getWeakPoints() {
 		return weakPoints;
+	}
+
+	public void updateReviewProgress(
+			BigDecimal mastery,
+			ReviewPointStatus status,
+			Instant lastReviewedAt,
+			Instant nextReviewAt,
+			int reviewCount,
+			int wrongCount,
+			List<String> weakPoints,
+			String nextProbe) {
+		this.mastery = mastery;
+		this.status = status;
+		this.lastReviewedAt = lastReviewedAt;
+		this.nextReviewAt = nextReviewAt;
+		this.reviewCount = reviewCount;
+		this.wrongCount = wrongCount;
+		this.weakPoints = new ArrayList<>(weakPoints);
+		this.nextProbe = nextProbe;
 	}
 }
