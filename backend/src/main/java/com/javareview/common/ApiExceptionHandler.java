@@ -27,6 +27,13 @@ public class ApiExceptionHandler {
 				.body(ErrorResponse.of("bad_request", exception.getMessage()));
 	}
 
+	@ExceptionHandler(ResourceNotFoundException.class)
+	ResponseEntity<ErrorResponse> handleNotFound(ResourceNotFoundException exception) {
+		return ResponseEntity
+				.status(HttpStatus.NOT_FOUND)
+				.body(ErrorResponse.of("not_found", exception.getMessage()));
+	}
+
 	@ExceptionHandler(BadCredentialsException.class)
 	ResponseEntity<ErrorResponse> handleBadCredentials() {
 		return ResponseEntity

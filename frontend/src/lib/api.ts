@@ -131,3 +131,74 @@ export function getApiErrorMessage(
   }
   return fallback
 }
+
+export type TopicSummary = {
+  id: string
+  domainId: string
+  domainName: string
+  code: string
+  title: string
+  source: 'BUILTIN' | 'MANUAL' | string
+  selected: boolean
+  reviewPointCount: number
+  coveredReviewPointCount: number
+  averageMastery: number
+  nextReviewAt: string | null
+  weakPointSummary: string[]
+}
+
+export type TopicDomain = {
+  id: string
+  code: string
+  name: string
+  topicCount: number
+  selectedCount: number
+  topics: TopicSummary[]
+}
+
+export type TopicTotals = {
+  domainCount: number
+  topicCount: number
+  selectedTopicCount: number
+  reviewPointCount: number
+  averageMastery: number
+}
+
+export type TopicsResponse = {
+  domains: TopicDomain[]
+  totals: TopicTotals
+}
+
+export type CreateTopicRequest = {
+  domainId: string
+  title: string
+}
+
+export function getTopics(search?: string) {
+  const params = new URLSearchParams()
+  if (search?.trim()) {
+    params.set('search', search.trim())
+  }
+  const query = params.toString()
+  return apiRequest<TopicsResponse>(`/api/topics${query ? `?${query}` : ''}`)
+}
+
+export function createTopic(body: CreateTopicRequest) {
+  return apiRequest<TopicSummary>('/api/topics', {
+    method: 'POST',
+    body,
+  })
+}
+
+export function updateTopicSelection(id: string, selected: boolean) {
+  return apiRequest<TopicSummary>(`/api/topics/${id}/selection`, {
+    method: 'PATCH',
+    body: { selected },
+  })
+}
+
+export function initializeTopicPoints(id: string) {
+  return apiRequest<TopicSummary>(`/api/topics/${id}/initialize-points`, {
+    method: 'POST',
+  })
+}
