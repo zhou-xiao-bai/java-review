@@ -10,7 +10,7 @@ import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.context.annotation.Import;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(
@@ -20,7 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 				HibernateJpaAutoConfiguration.class,
 				FlywayAutoConfiguration.class
 		})
-@Import(SecurityConfig.class)
+@AutoConfigureMockMvc(addFilters = false)
 class HealthControllerTests {
 
 	@Autowired

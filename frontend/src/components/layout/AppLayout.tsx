@@ -8,10 +8,14 @@ import {
   ShieldCheck,
   Target,
 } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
-import { NavLink, Outlet } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 
-import { getHealth } from '@/lib/api'
+import {
+  currentUserQueryKey,
+  useCurrentUser,
+} from '@/features/auth/hooks/useCurrentUser'
+import { getHealth, logout } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const navItems = [
@@ -24,11 +28,24 @@ const navItems = [
 ]
 
 export function AppLayout() {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const currentUserQuery = useCurrentUser()
   const healthQuery = useQuery({
     queryKey: ['health'],
     queryFn: getHealth,
     refetchInterval: 30_000,
   })
+  const logoutMutation = useMutation({
+    mutationFn: logout,
+    onSettled: async () => {
+      queryClient.removeQueries({ queryKey: currentUserQueryKey })
+      await queryClient.invalidateQueries({ queryKey: currentUserQueryKey })
+      navigate('/login', { replace: true })
+    },
+  })
+
+  const currentUser = currentUserQuery.data
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
@@ -83,16 +100,32 @@ export function AppLayout() {
               <div className="text-xs text-slate-500">
                 {healthQuery.isError
                   ? 'Backend health check failed'
-                  : 'Local MVP foundation'}
+                  : currentUser
+                    ? `${currentUser.displayName} · ${currentUser.role}`
+                    : 'Authenticated workspace'}
               </div>
             </div>
-            <button
-              type="button"
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              <LogOut className="size-4" aria-hidden="true" />
-              Logout
-            </button>
+            <div className="flex min-w-0 items-center gap-3">
+              {currentUser ? (
+                <div className="hidden min-w-0 text-right sm:block">
+                  <div className="truncate text-sm font-medium text-slate-900">
+                    {currentUser.displayName}
+                  </div>
+                  <div className="truncate text-xs text-slate-500">
+                    @{currentUser.username}
+                  </div>
+                </div>
+              ) : null}
+              <button
+                disabled={logoutMutation.isPending}
+                type="button"
+                onClick={() => logoutMutation.mutate()}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <LogOut className="size-4" aria-hidden="true" />
+                {logoutMutation.isPending ? 'Logging out...' : 'Logout'}
+              </button>
+            </div>
           </div>
         </header>
 

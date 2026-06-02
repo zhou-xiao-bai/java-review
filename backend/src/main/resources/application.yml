@@ -24,3 +24,9 @@ spring:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+app:
+  security:
+    remember-me:
+      key: ${REMEMBER_ME_KEY:java-review-dev-remember-me}
+      token-validity-seconds: ${REMEMBER_ME_SECONDS:1209600}
