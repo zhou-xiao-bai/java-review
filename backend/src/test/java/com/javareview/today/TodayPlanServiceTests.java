@@ -112,7 +112,52 @@ class TodayPlanServiceTests {
 	}
 
 	@Test
-	void dueTasksAreSortedByCalculatedPriority() {
+	void carryOverTasksMustBelongToSelectedTopics() {
+		ReviewPoint selectedPoint = point("事务代理生效边界", 5, 5, 5);
+		Topic unselectedTopic = new Topic(
+				new Domain(java.util.UUID.randomUUID(), "redis", "Redis", 50),
+				"redis-cache-consistency",
+				"缓存一致性",
+				TopicSource.BUILTIN,
+				false);
+		ReviewPoint unselectedPoint = new ReviewPoint(
+				unselectedTopic,
+				"缓存双写一致性",
+				5,
+				5,
+				5,
+				"next probe");
+		ReviewTask selectedOldTask = new ReviewTask(
+				user,
+				selectedPoint,
+				TODAY.minusDays(1),
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		ReviewTask unselectedOldTask = new ReviewTask(
+				user,
+				unselectedPoint,
+				TODAY.minusDays(1),
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.findCarryOverCandidates(eq(user.getId()), eq(TODAY), anyCollection()))
+				.thenReturn(List.of(unselectedOldTask, selectedOldTask));
+		when(reviewPointRepository.findDueCandidates(eq(user.getId()), eq(TODAY), any()))
+				.thenReturn(List.of());
+		when(reviewPointRepository.findNewExpansionCandidates(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		TodayPlanResponse response = todayPlanService.generateToday(user);
+
+		assertThat(response.groups().get(0).tasks())
+				.extracting(task -> task.pointTitle())
+				.containsExactly("事务代理生效边界");
+	}
+
+	@Test
+	void dueTasksAreSelectedFromEligibleCandidatesWithoutFixedOrdering() {
 		ReviewPoint highPriority = duePoint("生产事务失效排查", 5, 5, 5, TODAY.minusDays(3));
 		ReviewPoint lowPriority = duePoint("事务上下文与线程绑定", 2, 2, 2, TODAY.minusDays(1));
 		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
@@ -127,7 +172,7 @@ class TodayPlanServiceTests {
 
 		assertThat(response.groups().get(1).tasks())
 				.extracting(task -> task.pointTitle())
-				.containsExactly("生产事务失效排查", "事务上下文与线程绑定");
+				.containsExactlyInAnyOrder("生产事务失效排查", "事务上下文与线程绑定");
 	}
 
 	@Test
@@ -175,6 +220,86 @@ class TodayPlanServiceTests {
 		assertThat(response.scheduledMinutes()).isEqualTo(120);
 		assertThat(response.remainingMinutes()).isZero();
 		assertThat(response.groups().get(1).tasks()).hasSize(12);
+	}
+
+	@Test
+	void manualTasksDoNotConsumeTodayPlanCapacity() {
+		ReviewTask manualTask = new ReviewTask(
+				user,
+				"手写 AQS acquire 流程",
+				TODAY,
+				ReviewTaskType.MANUAL,
+				BigDecimal.TEN,
+				30);
+		List<ReviewPoint> duePoints = new ArrayList<>();
+		for (int index = 0; index < 8; index++) {
+			duePoints.add(duePoint("到期点 " + index, 5, 5, 5, TODAY.minusDays(index + 1L)));
+		}
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of(manualTask));
+		when(reviewTaskRepository.findCarryOverCandidates(eq(user.getId()), eq(TODAY), anyCollection()))
+				.thenReturn(List.of());
+		when(reviewPointRepository.findDueCandidates(eq(user.getId()), eq(TODAY), any()))
+				.thenReturn(duePoints);
+		when(reviewTaskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		TodayPlanResponse response = todayPlanService.generateToday(user);
+
+		assertThat(response.scheduledMinutes()).isEqualTo(60);
+		assertThat(response.remainingMinutes()).isZero();
+		assertThat(response.groups().get(1).tasks()).hasSize(6);
+		assertThat(response.groups().get(3).scheduledMinutes()).isEqualTo(30);
+	}
+
+	@Test
+	void removedTasksAreHiddenAndDoNotConsumeCapacityButCompletedMinutesRemain() {
+		ReviewTask removedCompletedTask = new ReviewTask(
+				user,
+				point("传播行为与嵌套调用", 5, 4, 5),
+				TODAY,
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		removedCompletedTask.complete(Instant.parse("2026-06-02T08:00:00Z"));
+		removedCompletedTask.removeFromToday(Instant.parse("2026-06-02T08:10:00Z"));
+		ReviewTask visibleTask = new ReviewTask(
+				user,
+				point("事务代理生效边界", 5, 4, 5),
+				TODAY,
+				ReviewTaskType.DUE,
+				BigDecimal.ONE,
+				10);
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of(removedCompletedTask, visibleTask));
+
+		TodayPlanResponse response = todayPlanService.getToday(user);
+
+		assertThat(response.scheduledMinutes()).isEqualTo(10);
+		assertThat(response.completedMinutes()).isEqualTo(10);
+		assertThat(response.remainingMinutes()).isEqualTo(50);
+		assertThat(response.groups().get(1).tasks())
+				.extracting(task -> task.pointTitle())
+				.containsExactly("事务代理生效边界");
+	}
+
+	@Test
+	void removeTasksMarksTodayTasksAsRemovedAndReturnsVisiblePlan() {
+		ReviewTask task = new ReviewTask(
+				user,
+				point("传播行为与嵌套调用", 5, 4, 5),
+				TODAY,
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		when(reviewTaskRepository.findAllByIdsAndUserIdWithPoint(anyCollection(), eq(user.getId())))
+				.thenReturn(List.of(task));
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of(task));
+
+		TodayPlanResponse response = todayPlanService.removeTasks(
+				user,
+				new TodayDtos.RemoveReviewTasksRequest(List.of(task.getId())));
+
+		assertThat(task.isRemoved()).isTrue();
+		assertThat(response.scheduledMinutes()).isZero();
+		assertThat(response.groups()).allSatisfy(group -> assertThat(group.tasks()).isEmpty());
 	}
 
 	@Test

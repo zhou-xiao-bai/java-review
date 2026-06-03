@@ -6,6 +6,7 @@ import jakarta.validation.Valid;
 
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.javareview.auth.AuthService;
 import com.javareview.auth.User;
 import com.javareview.today.TodayDtos.CreateManualTaskRequest;
+import com.javareview.today.TodayDtos.RemoveReviewTasksRequest;
 import com.javareview.today.TodayDtos.ReviewTaskResponse;
 import com.javareview.today.TodayDtos.TodayPlanResponse;
 
@@ -55,6 +57,20 @@ public class TodayController {
 			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,
 			@Valid @RequestBody CreateManualTaskRequest request) {
 		return todayPlanService.createManualTask(currentUser(principal), request);
+	}
+
+	@DeleteMapping("/review-tasks/{id}")
+	public TodayPlanResponse removeTask(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,
+			@PathVariable UUID id) {
+		return todayPlanService.removeTask(currentUser(principal), id);
+	}
+
+	@PostMapping("/review-tasks/batch-remove")
+	public TodayPlanResponse removeTasks(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,
+			@Valid @RequestBody RemoveReviewTasksRequest request) {
+		return todayPlanService.removeTasks(currentUser(principal), request);
 	}
 
 	@PatchMapping("/review-tasks/{id}/skip")

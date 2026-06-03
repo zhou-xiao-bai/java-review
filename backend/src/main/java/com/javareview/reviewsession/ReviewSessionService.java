@@ -24,6 +24,7 @@ import com.javareview.settings.SettingsService;
 import com.javareview.settings.UserSettings;
 import com.javareview.today.ReviewTask;
 import com.javareview.today.ReviewTaskRepository;
+import com.javareview.today.ReviewTaskStatus;
 import com.javareview.reviewsession.ReviewEvaluation.ReviewScore;
 import com.javareview.reviewsession.ReviewSessionDtos.ClarifyRequest;
 import com.javareview.reviewsession.ReviewSessionDtos.ReviewSessionResponse;
@@ -62,6 +63,18 @@ public class ReviewSessionService {
 	@Transactional
 	public ReviewSessionResponse start(User user, StartReviewSessionRequest request) {
 		ReviewTask task = requireTask(user, request.taskId());
+		if (task.isRemoved()) {
+			throw new IllegalStateException("Review task has been removed from today's plan.");
+		}
+		if (task.getStatus() == ReviewTaskStatus.COMPLETED || task.getStatus() == ReviewTaskStatus.SKIPPED) {
+			throw new IllegalStateException("Review task is no longer startable.");
+		}
+		if (task.getStatus() == ReviewTaskStatus.IN_PROGRESS) {
+			List<ReviewSession> activeSessions = reviewSessionRepository.findActiveByTaskIdAndUserId(task.getId(), user.getId());
+			if (!activeSessions.isEmpty()) {
+				return toResponse(activeSessions.getFirst());
+			}
+		}
 		task.start();
 		ReviewSession session = reviewSessionRepository.save(new ReviewSession(user, task, Instant.now(clock)));
 		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION, generateInitialQuestion(user, task)));

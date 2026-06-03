@@ -1,7 +1,7 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, ArrowLeft, CheckCircle2, HelpCircle, Loader2, Send, SkipForward } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { AlertCircle, ArrowLeft, CheckCircle2, HelpCircle, ListChecks, Loader2, PauseCircle, Play, Send, SkipForward } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import {
   answerReviewSession,
@@ -17,20 +17,38 @@ import {
 import { cn } from '@/lib/utils'
 
 const todayQueryKey = ['today'] as const
+type SessionMode = 'manual' | 'immersive'
 
 export function ReviewSessionPage() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [session, setSession] = useState<ReviewSession | null>(null)
   const [pendingTask, setPendingTask] = useState<ReviewTask | null>(null)
   const [answer, setAnswer] = useState('')
   const [clarifyText, setClarifyText] = useState('')
+  const autoStartedTaskIdRef = useRef<string | null>(null)
   const todayQuery = useQuery({ queryKey: todayQueryKey, queryFn: getToday })
   const tasks = useMemo(
     () => todayQuery.data?.groups.flatMap((group) => group.tasks) ?? [],
     [todayQuery.data],
   )
-  const activeTasks = tasks.filter((task) => ['pending', 'in_progress'].includes(task.status))
+  const activeTasks = useMemo(() => tasks.filter(isStartableTask), [tasks])
+  const currentTaskId = session?.taskId ?? pendingTask?.id ?? null
+  const currentTaskIndex = currentTaskId
+    ? tasks.findIndex((task) => task.id === currentTaskId)
+    : -1
+  const handledTaskCount = tasks.filter((task) => !isStartableTask(task)).length
+  const progressPosition = currentTaskIndex >= 0
+    ? currentTaskIndex + 1
+    : Math.min(tasks.length, handledTaskCount + (activeTasks.length > 0 ? 1 : 0))
+  const progressPercent = tasks.length > 0
+    ? Math.round((Math.max(handledTaskCount, progressPosition - 1) / tasks.length) * 100)
+    : 0
+  const mode: SessionMode = searchParams.get('mode') === 'immersive' ? 'immersive' : 'manual'
+  const hasNextTask = session
+    ? activeTasks.some((task) => task.id !== session.taskId)
+    : activeTasks.length > 0
 
   const startMutation = useMutation({
     mutationFn: (task: ReviewTask) => startReviewSession(task.id),
@@ -49,7 +67,13 @@ export function ReviewSessionPage() {
       await queryClient.invalidateQueries({ queryKey: todayQueryKey })
     },
   })
-  const unknownMutation = useMutation({ mutationFn: unknownReviewSession, onSuccess: setSession })
+  const unknownMutation = useMutation({
+    mutationFn: unknownReviewSession,
+    onSuccess: async (nextSession) => {
+      setSession(nextSession)
+      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+    },
+  })
   const clarifyMutation = useMutation({
     mutationFn: ({ id, question }: { id: string; question: string }) => clarifyReviewSession(id, question),
     onSuccess: (nextSession) => {
@@ -73,6 +97,38 @@ export function ReviewSessionPage() {
     getApiErrorMessage(skipMutation.error, '') ||
     (todayQuery.isError ? getApiErrorMessage(todayQuery.error) : '')
 
+  const startTask = useCallback((task: ReviewTask) => {
+    setSession(null)
+    setPendingTask(task)
+    startMutation.mutate(task)
+  }, [startMutation])
+
+  useEffect(() => {
+    if (
+      mode !== 'immersive' ||
+      todayQuery.isLoading ||
+      startMutation.isPending ||
+      session ||
+      pendingTask
+    ) {
+      return
+    }
+    const next = activeTasks[0]
+    if (next && next.id !== autoStartedTaskIdRef.current) {
+      autoStartedTaskIdRef.current = next.id
+      const timeoutId = window.setTimeout(() => startTask(next), 0)
+      return () => window.clearTimeout(timeoutId)
+    }
+  }, [
+    activeTasks,
+    mode,
+    pendingTask,
+    session,
+    startTask,
+    startMutation.isPending,
+    todayQuery.isLoading,
+  ])
+
   function submitAnswer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!session) return
@@ -80,14 +136,29 @@ export function ReviewSessionPage() {
   }
 
   function startNextTask() {
-    const next = activeTasks.find((task) => task.id !== session?.taskId) ?? activeTasks[0]
+    const currentIndex = session
+      ? tasks.findIndex((task) => task.id === session.taskId)
+      : -1
+    const nextAfterCurrent = currentIndex >= 0
+      ? tasks.slice(currentIndex + 1).find(isStartableTask)
+      : undefined
+    const next = nextAfterCurrent ??
+      activeTasks.find((task) => task.id !== session?.taskId) ??
+      activeTasks[0]
     if (next) startTask(next)
   }
 
-  function startTask(task: ReviewTask) {
-    setSession(null)
-    setPendingTask(task)
-    startMutation.mutate(task)
+  function enterImmersiveMode() {
+    setSearchParams({ mode: 'immersive' })
+    if (!session && !pendingTask && activeTasks[0]) {
+      autoStartedTaskIdRef.current = activeTasks[0].id
+      startTask(activeTasks[0])
+    }
+  }
+
+  function exitImmersiveMode() {
+    autoStartedTaskIdRef.current = null
+    setSearchParams({})
   }
 
   return (
@@ -95,15 +166,46 @@ export function ReviewSessionPage() {
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-3xl font-semibold text-slate-950">复习会话</h1>
+          <div className="mt-1 text-sm text-slate-500">
+            {mode === 'immersive' ? '沉浸式推进今日队列' : '手动选择今日任务'}
+          </div>
         </div>
-        <button
-          className="inline-flex h-10 w-fit items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-          type="button"
-          onClick={() => navigate('/today')}
-        >
-          <ArrowLeft className="size-4" />
-          返回今日计划
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className={cn(
+              'inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium shadow-sm disabled:opacity-60',
+              mode === 'manual'
+                ? 'bg-slate-900 text-white hover:bg-slate-800'
+                : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+            )}
+            type="button"
+            onClick={exitImmersiveMode}
+          >
+            <ListChecks className="size-4" />
+            手动队列
+          </button>
+          <button
+            className={cn(
+              'inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium shadow-sm disabled:opacity-60',
+              mode === 'immersive'
+                ? 'bg-emerald-700 text-white hover:bg-emerald-800'
+                : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+            )}
+            type="button"
+            onClick={enterImmersiveMode}
+          >
+            <Play className="size-4" />
+            沉浸式
+          </button>
+          <button
+            className="inline-flex h-10 w-fit items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            type="button"
+            onClick={() => navigate('/today')}
+          >
+            <ArrowLeft className="size-4" />
+            返回今日计划
+          </button>
+        </div>
       </div>
 
       {errorMessage ? (
@@ -113,30 +215,43 @@ export function ReviewSessionPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="h-fit rounded-lg border border-slate-200 bg-white shadow-sm xl:sticky xl:top-24">
-          <div className="border-b border-slate-200 px-4 py-3">
-            <h2 className="text-sm font-semibold text-slate-950">今日队列</h2>
-            <div className="mt-1 text-xs text-slate-500">{activeTasks.length} 个待复习任务</div>
-          </div>
-          <div className="max-h-[620px] divide-y divide-slate-100 overflow-auto">
-            {tasks.length === 0 ? (
-              <div className="p-4 text-sm text-slate-500">暂无今日任务。</div>
-            ) : (
-              tasks.map((task) => (
-                <TaskButton
-                  key={task.id}
-                  active={session?.taskId === task.id || pendingTask?.id === task.id}
-                  disabled={startMutation.isPending || !['pending', 'in_progress'].includes(task.status)}
-                  task={task}
-                  onStart={() => startTask(task)}
-                />
-              ))
-            )}
-          </div>
-        </aside>
+      <div className={cn('grid gap-5', mode === 'immersive' ? 'xl:grid-cols-1' : 'xl:grid-cols-[320px_minmax(0,1fr)]')}>
+        {mode === 'manual' ? (
+          <aside className="h-fit rounded-lg border border-slate-200 bg-white shadow-sm xl:sticky xl:top-24">
+            <div className="border-b border-slate-200 px-4 py-3">
+              <h2 className="text-sm font-semibold text-slate-950">今日队列</h2>
+              <div className="mt-1 text-xs text-slate-500">{activeTasks.length} 个待复习任务</div>
+            </div>
+            <div className="max-h-[620px] divide-y divide-slate-100 overflow-auto">
+              {tasks.length === 0 ? (
+                <div className="p-4 text-sm text-slate-500">暂无今日任务。</div>
+              ) : (
+                tasks.map((task) => (
+                  <TaskButton
+                    key={task.id}
+                    active={session?.taskId === task.id || pendingTask?.id === task.id}
+                    disabled={startMutation.isPending || !isStartableTask(task)}
+                    task={task}
+                    onStart={() => startTask(task)}
+                  />
+                ))
+              )}
+            </div>
+          </aside>
+        ) : null}
 
         <main className="space-y-4">
+          {mode === 'immersive' ? (
+            <ImmersiveProgress
+              activeCount={activeTasks.length}
+              handledCount={handledTaskCount}
+              onExit={exitImmersiveMode}
+              percent={progressPercent}
+              position={progressPosition}
+              total={tasks.length}
+            />
+          ) : null}
+
           {!session && !pendingTask ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
               <div>
@@ -146,8 +261,21 @@ export function ReviewSessionPage() {
                     ? '暂无今日任务，请先返回今日计划补齐队列。'
                     : activeTasks.length === 0
                       ? '今日任务已完成或跳过。'
-                      : '请选择一个今日任务开始严格面试复习。'}
+                      : mode === 'immersive'
+                        ? '正在准备第一道题。'
+                        : '请选择一个今日任务开始严格面试复习。'}
               </div>
+              {mode === 'immersive' && activeTasks.length > 0 ? (
+                <button
+                  className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-emerald-700 px-3 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
+                  type="button"
+                  disabled={startMutation.isPending}
+                  onClick={() => startTask(activeTasks[0])}
+                >
+                  {startMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+                  开始沉浸式复习
+                </button>
+              ) : null}
               {todayQuery.isLoading ? null : tasks.length === 0 || activeTasks.length === 0 ? (
                 <button
                   className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800"
@@ -221,7 +349,14 @@ export function ReviewSessionPage() {
                   </div>
                 </section>
               ) : (
-                session ? <EvaluationPanel session={session} onNext={startNextTask} hasNext={activeTasks.length > 0} /> : null
+                session ? (
+                  <EvaluationPanel
+                    session={session}
+                    onNext={startNextTask}
+                    hasNext={hasNextTask}
+                    nextLabel={mode === 'immersive' ? '继续下一题' : '进入下一题'}
+                  />
+                ) : null
               )}
             </>
           )}
@@ -249,6 +384,55 @@ function TaskButton({ active, disabled, task, onStart }: { active: boolean; disa
         <span>{task.statusLabel}</span>
       </div>
     </button>
+  )
+}
+
+function ImmersiveProgress({
+  activeCount,
+  handledCount,
+  onExit,
+  percent,
+  position,
+  total,
+}: {
+  activeCount: number
+  handledCount: number
+  onExit: () => void
+  percent: number
+  position: number
+  total: number
+}) {
+  return (
+    <section className="rounded-lg border border-emerald-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+            <Play className="size-4" aria-hidden="true" />
+            沉浸式复习
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-slate-950">
+            {total === 0 ? '暂无任务' : `第 ${Math.max(1, position)} / ${total} 题`}
+          </div>
+          <div className="mt-1 text-sm text-slate-500">
+            已处理 {handledCount} 项 · 剩余 {activeCount} 项
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onExit}
+          className="inline-flex h-10 w-fit items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          <PauseCircle className="size-4" aria-hidden="true" />
+          退出沉浸式
+        </button>
+      </div>
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-emerald-50">
+        <div
+          className="h-full rounded-full bg-emerald-600 transition-all"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </section>
   )
 }
 
@@ -450,7 +634,17 @@ function turnTypeLabel(type: string) {
   return labels[type] ?? type
 }
 
-function EvaluationPanel({ session, onNext, hasNext }: { session: ReviewSession; onNext: () => void; hasNext: boolean }) {
+function EvaluationPanel({
+  hasNext,
+  nextLabel,
+  onNext,
+  session,
+}: {
+  hasNext: boolean
+  nextLabel: string
+  onNext: () => void
+  session: ReviewSession
+}) {
   const evaluation = session.evaluation
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -478,7 +672,7 @@ function EvaluationPanel({ session, onNext, hasNext }: { session: ReviewSession;
         <div className="mt-3 text-sm text-slate-500">本题已跳过，未更新掌握度。</div>
       )}
       <button className="mt-5 h-10 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60" disabled={!hasNext} type="button" onClick={onNext}>
-        进入下一题
+        {hasNext ? nextLabel : '今日队列已完成'}
       </button>
     </section>
   )
@@ -504,4 +698,8 @@ function TextBlock({ title, value }: { title: string; value: string }) {
 
 function ListBlock({ title, values }: { title: string; values: string[] }) {
   return <TextBlock title={title} value={values.length > 0 ? values.join(' / ') : '无'} />
+}
+
+function isStartableTask(task: ReviewTask) {
+  return task.status === 'pending' || task.status === 'in_progress'
 }

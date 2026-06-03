@@ -32,6 +32,19 @@ public interface ReviewTaskRepository extends JpaRepository<ReviewTask, UUID> {
 			left join fetch task.reviewPoint point
 			left join fetch point.topic topic
 			left join fetch topic.domain domain
+			where task.id in :ids
+			and task.user.id = :userId
+			""")
+	List<ReviewTask> findAllByIdsAndUserIdWithPoint(
+			@Param("ids") Collection<UUID> ids,
+			@Param("userId") UUID userId);
+
+	@Query("""
+			select task
+			from ReviewTask task
+			left join fetch task.reviewPoint point
+			left join fetch point.topic topic
+			left join fetch topic.domain domain
 			where task.user.id = :userId
 			and task.taskDate = :taskDate
 			order by task.priorityScore desc, task.createdAt asc
@@ -49,6 +62,9 @@ public interface ReviewTaskRepository extends JpaRepository<ReviewTask, UUID> {
 			where task.user.id = :userId
 			and task.taskDate < :today
 			and task.status in :statuses
+			and task.removedAt is null
+			and task.type <> com.javareview.today.ReviewTaskType.MANUAL
+			and topic.selected = true
 			order by task.taskDate asc, task.priorityScore desc, task.createdAt asc
 			""")
 	List<ReviewTask> findCarryOverCandidates(
@@ -63,6 +79,7 @@ public interface ReviewTaskRepository extends JpaRepository<ReviewTask, UUID> {
 			and task.taskDate = :taskDate
 			and task.status = com.javareview.today.ReviewTaskStatus.PENDING
 			and task.type <> com.javareview.today.ReviewTaskType.MANUAL
+			and task.removedAt is null
 			""")
 	int deletePendingGeneratedTasks(
 			@Param("userId") UUID userId,

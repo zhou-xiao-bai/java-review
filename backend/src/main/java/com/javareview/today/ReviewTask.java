@@ -60,6 +60,9 @@ public class ReviewTask {
 	@Column(name = "completed_at")
 	private Instant completedAt;
 
+	@Column(name = "removed_at")
+	private Instant removedAt;
+
 	protected ReviewTask() {
 	}
 
@@ -144,6 +147,14 @@ public class ReviewTask {
 		return completedAt;
 	}
 
+	public Instant getRemovedAt() {
+		return removedAt;
+	}
+
+	public boolean isRemoved() {
+		return removedAt != null;
+	}
+
 	public void skip(Instant skippedAt) {
 		this.status = ReviewTaskStatus.SKIPPED;
 		this.completedAt = skippedAt;
@@ -161,5 +172,9 @@ public class ReviewTask {
 	public void complete(Instant completedAt) {
 		this.status = ReviewTaskStatus.COMPLETED;
 		this.completedAt = completedAt;
+	}
+
+	public void removeFromToday(Instant removedAt) {
+		this.removedAt = removedAt;
 	}
 }

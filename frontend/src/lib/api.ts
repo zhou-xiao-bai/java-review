@@ -241,6 +241,7 @@ export type ReviewTask = {
   nextReviewAt: string | null
   createdAt: string | null
   completedAt: string | null
+  removedAt: string | null
 }
 
 export type ReviewTaskGroup = {
@@ -298,6 +299,19 @@ export function skipReviewTask(id: string) {
 export function unskipReviewTask(id: string) {
   return apiRequest<ReviewTask>(`/api/review-tasks/${id}/unskip`, {
     method: 'PATCH',
+  })
+}
+
+export function removeReviewTask(id: string) {
+  return apiRequest<TodayPlan>(`/api/review-tasks/${id}`, {
+    method: 'DELETE',
+  })
+}
+
+export function removeReviewTasks(taskIds: string[]) {
+  return apiRequest<TodayPlan>('/api/review-tasks/batch-remove', {
+    method: 'POST',
+    body: { taskIds },
   })
 }
 

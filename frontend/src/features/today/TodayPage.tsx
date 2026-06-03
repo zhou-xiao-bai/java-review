@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   CalendarDays,
+  CheckSquare,
   Clock,
   Loader2,
   Play,
@@ -10,6 +11,8 @@ import {
   RefreshCw,
   RotateCcw,
   SkipForward,
+  Square,
+  Trash2,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
@@ -20,6 +23,8 @@ import {
   getApiErrorMessage,
   getToday,
   regenerateToday,
+  removeReviewTask,
+  removeReviewTasks,
   skipReviewTask,
   unskipReviewTask,
   type ReviewTask,
@@ -38,6 +43,9 @@ export function TodayPage() {
   const currentUserQuery = useCurrentUser()
   const [manualPrompt, setManualPrompt] = useState('')
   const [manualMinutes, setManualMinutes] = useState(10)
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
+    () => new Set(),
+  )
 
   const todayQuery = useQuery({
     queryKey: todayQueryKey,
@@ -47,14 +55,14 @@ export function TodayPage() {
   const generateMutation = useMutation({
     mutationFn: generateToday,
     onSuccess: (plan) => {
-      queryClient.setQueryData(todayQueryKey, plan)
+      applyTodayPlan(plan)
     },
   })
 
   const regenerateMutation = useMutation({
     mutationFn: regenerateToday,
     onSuccess: (plan) => {
-      queryClient.setQueryData(todayQueryKey, plan)
+      applyTodayPlan(plan)
     },
   })
 
@@ -81,7 +89,32 @@ export function TodayPage() {
     },
   })
 
+  const removeMutation = useMutation({
+    mutationFn: removeReviewTask,
+    onSuccess: (plan) => {
+      applyTodayPlan(plan)
+    },
+  })
+
+  const batchRemoveMutation = useMutation({
+    mutationFn: removeReviewTasks,
+    onSuccess: (plan) => {
+      applyTodayPlan(plan)
+    },
+  })
+
   const plan = todayQuery.data
+  const allTasks = useMemo(
+    () => plan?.groups.flatMap((group) => group.tasks) ?? [],
+    [plan],
+  )
+  const allTaskIds = useMemo(() => allTasks.map((task) => task.id), [allTasks])
+  const selectedVisibleTaskIds = useMemo(
+    () => allTaskIds.filter((id) => selectedTaskIds.has(id)),
+    [allTaskIds, selectedTaskIds],
+  )
+  const selectedCount = selectedVisibleTaskIds.length
+  const allSelected = allTaskIds.length > 0 && selectedCount === allTaskIds.length
   const taskCount = useMemo(
     () => plan?.groups.reduce((count, group) => count + group.tasks.length, 0) ?? 0,
     [plan],
@@ -104,7 +137,18 @@ export function TodayPage() {
     getApiErrorMessage(manualMutation.error, '') ||
     getApiErrorMessage(skipMutation.error, '') ||
     getApiErrorMessage(unskipMutation.error, '') ||
+    getApiErrorMessage(removeMutation.error, '') ||
+    getApiErrorMessage(batchRemoveMutation.error, '') ||
     (todayQuery.isError ? getApiErrorMessage(todayQuery.error) : '')
+
+  function applyTodayPlan(nextPlan: TodayPlan) {
+    queryClient.setQueryData(todayQueryKey, nextPlan)
+    const visibleIds = new Set(taskIds(nextPlan))
+    setSelectedTaskIds((current) => {
+      const next = new Set([...current].filter((id) => visibleIds.has(id)))
+      return next.size === current.size ? current : next
+    })
+  }
 
   function handleManualSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -112,6 +156,45 @@ export function TodayPage() {
       prompt: manualPrompt,
       estimatedMinutes: manualMinutes,
     })
+  }
+
+  function toggleAllTasks() {
+    setSelectedTaskIds(() => (allSelected ? new Set() : new Set(allTaskIds)))
+  }
+
+  function toggleGroup(group: ReviewTaskGroup) {
+    const groupIds = group.tasks.map((task) => task.id)
+    const groupSelected = groupIds.every((id) => selectedTaskIds.has(id))
+    setSelectedTaskIds((current) => {
+      const next = new Set(current)
+      for (const id of groupIds) {
+        if (groupSelected) {
+          next.delete(id)
+        } else {
+          next.add(id)
+        }
+      }
+      return next
+    })
+  }
+
+  function toggleTask(task: ReviewTask) {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current)
+      if (next.has(task.id)) {
+        next.delete(task.id)
+      } else {
+        next.add(task.id)
+      }
+      return next
+    })
+  }
+
+  function removeSelectedTasks() {
+    const ids = selectedVisibleTaskIds
+    if (ids.length > 0) {
+      batchRemoveMutation.mutate(ids)
+    }
   }
 
   return (
@@ -167,7 +250,16 @@ export function TodayPage() {
             className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Play className="size-4" aria-hidden="true" />
-            开始今日复习
+            手动选择
+          </button>
+          <button
+            type="button"
+            disabled={pendingTaskCount === 0}
+            onClick={() => navigate('/review/session?mode=immersive')}
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-700 px-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Play className="size-4" aria-hidden="true" />
+            沉浸式复习
           </button>
         </div>
       </div>
@@ -198,6 +290,18 @@ export function TodayPage() {
             <SummaryCard label="今日加练" metric={plan?.summary.manual} tone="slate" />
           </div>
 
+          {taskCount > 0 ? (
+            <SelectionToolbar
+              allSelected={allSelected}
+              pending={batchRemoveMutation.isPending}
+              selectedCount={selectedCount}
+              totalCount={allTaskIds.length}
+              onClear={() => setSelectedTaskIds(new Set())}
+              onRemove={removeSelectedTasks}
+              onToggleAll={toggleAllTasks}
+            />
+          ) : null}
+
           {todayQuery.isLoading ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
               正在加载今日计划...
@@ -215,8 +319,16 @@ export function TodayPage() {
                 skipPending={skipMutation.isPending}
                 unskippingTaskId={unskipMutation.variables}
                 unskipPending={unskipMutation.isPending}
+                selectedTaskIds={selectedTaskIds}
+                removingTaskId={removeMutation.variables}
+                removePending={removeMutation.isPending}
+                batchRemovingTaskIds={batchRemoveMutation.variables ?? []}
+                batchRemovePending={batchRemoveMutation.isPending}
                 onSkip={(task) => skipMutation.mutate(task.id)}
                 onUnskip={(task) => unskipMutation.mutate(task.id)}
+                onToggleGroup={() => toggleGroup(group)}
+                onToggleTask={toggleTask}
+                onRemove={(task) => removeMutation.mutate(task.id)}
               />
             ))
           )}
@@ -294,7 +406,7 @@ function PlanProgress({
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <div className="text-sm font-semibold text-slate-950">
-            1 小时复习进度
+            今日计划进度
           </div>
           <div className="mt-1 text-xs text-slate-500">
             {loading
@@ -358,18 +470,98 @@ function SummaryCard({
   )
 }
 
+function SelectionToolbar({
+  allSelected,
+  onClear,
+  onRemove,
+  onToggleAll,
+  pending,
+  selectedCount,
+  totalCount,
+}: {
+  allSelected: boolean
+  onClear: () => void
+  onRemove: () => void
+  onToggleAll: () => void
+  pending: boolean
+  selectedCount: number
+  totalCount: number
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+      <button
+        type="button"
+        onClick={onToggleAll}
+        className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+      >
+        {allSelected ? (
+          <CheckSquare className="size-4 text-emerald-700" aria-hidden="true" />
+        ) : (
+          <Square className="size-4" aria-hidden="true" />
+        )}
+        {allSelected ? '取消全选' : `全选 ${totalCount} 项`}
+      </button>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-slate-500">
+          已选 {selectedCount} 项
+        </span>
+        {selectedCount > 0 ? (
+          <button
+            type="button"
+            onClick={onClear}
+            disabled={pending}
+            className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            清空选择
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={selectedCount === 0 || pending}
+          className="inline-flex h-9 items-center gap-2 rounded-md bg-rose-600 px-3 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Trash2 className="size-4" aria-hidden="true" />
+          )}
+          移出今日计划
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function TaskGroupPanel({
+  batchRemovePending,
+  batchRemovingTaskIds,
   group,
+  onRemove,
   onSkip,
+  onToggleGroup,
+  onToggleTask,
   onUnskip,
+  removePending,
+  removingTaskId,
+  selectedTaskIds,
   skipPending,
   skippingTaskId,
   unskipPending,
   unskippingTaskId,
 }: {
+  batchRemovePending: boolean
+  batchRemovingTaskIds: string[]
   group: ReviewTaskGroup
+  onRemove: (task: ReviewTask) => void
   onSkip: (task: ReviewTask) => void
+  onToggleGroup: () => void
+  onToggleTask: (task: ReviewTask) => void
   onUnskip: (task: ReviewTask) => void
+  removePending: boolean
+  removingTaskId: string | undefined
+  selectedTaskIds: Set<string>
   skipPending: boolean
   skippingTaskId: string | undefined
   unskipPending: boolean
@@ -379,13 +571,36 @@ function TaskGroupPanel({
     return null
   }
 
+  const groupSelected = group.tasks.every((task) => selectedTaskIds.has(task.id))
+  const groupIndeterminate = !groupSelected && group.tasks.some((task) => selectedTaskIds.has(task.id))
+
   return (
     <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-950">{group.label}</h2>
-          <div className="mt-1 text-xs text-slate-500">
-            {group.count} 项 · {group.scheduledMinutes} 分钟
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            title={groupSelected ? '取消选择本组' : '选择本组'}
+            aria-label={groupSelected ? '取消选择本组' : '选择本组'}
+            onClick={onToggleGroup}
+            className={cn(
+              'inline-flex size-8 shrink-0 items-center justify-center rounded-md border text-slate-500 hover:bg-slate-50 hover:text-slate-900',
+              groupSelected || groupIndeterminate
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-slate-200 bg-white',
+            )}
+          >
+            {groupSelected || groupIndeterminate ? (
+              <CheckSquare className="size-4" aria-hidden="true" />
+            ) : (
+              <Square className="size-4" aria-hidden="true" />
+            )}
+          </button>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-slate-950">{group.label}</h2>
+            <div className="mt-1 text-xs text-slate-500">
+              {group.count} 项 · {group.scheduledMinutes} 分钟
+            </div>
           </div>
         </div>
       </div>
@@ -395,9 +610,16 @@ function TaskGroupPanel({
           <TaskRow
             key={task.id}
             task={task}
+            selected={selectedTaskIds.has(task.id)}
             skipPending={skipPending && skippingTaskId === task.id}
             unskipPending={unskipPending && unskippingTaskId === task.id}
+            removePending={
+              (removePending && removingTaskId === task.id) ||
+              (batchRemovePending && batchRemovingTaskIds.includes(task.id))
+            }
+            onRemove={() => onRemove(task)}
             onSkip={() => onSkip(task)}
+            onToggle={() => onToggleTask(task)}
             onUnskip={() => onUnskip(task)}
           />
         ))}
@@ -407,23 +629,57 @@ function TaskGroupPanel({
 }
 
 function TaskRow({
+  onRemove,
   onSkip,
+  onToggle,
   onUnskip,
+  removePending,
+  selected,
   skipPending,
   unskipPending,
   task,
 }: {
+  onRemove: () => void
   onSkip: () => void
+  onToggle: () => void
   onUnskip: () => void
+  removePending: boolean
+  selected: boolean
   skipPending: boolean
   unskipPending: boolean
   task: ReviewTask
 }) {
   const canSkip = ['pending', 'in_progress'].includes(task.status)
   const canUnskip = task.status === 'skipped'
-  const actionPending = skipPending || unskipPending
+  const actionPending = skipPending || unskipPending || removePending
   return (
-    <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_170px_120px_44px]">
+    <div
+      className={cn(
+        'grid gap-3 px-4 py-3 lg:grid-cols-[32px_minmax(0,1fr)_170px_120px_92px]',
+        selected && 'bg-emerald-50/50',
+      )}
+    >
+      <div className="flex items-start pt-1">
+        <button
+          type="button"
+          title={selected ? '取消选择' : '选择任务'}
+          aria-label={selected ? '取消选择' : '选择任务'}
+          onClick={onToggle}
+          className={cn(
+            'inline-flex size-8 items-center justify-center rounded-md border text-slate-500 hover:bg-slate-50 hover:text-slate-900',
+            selected
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : 'border-slate-200 bg-white',
+          )}
+        >
+          {selected ? (
+            <CheckSquare className="size-4" aria-hidden="true" />
+          ) : (
+            <Square className="size-4" aria-hidden="true" />
+          )}
+        </button>
+      </div>
+
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className="truncate text-sm font-medium text-slate-950">
@@ -453,7 +709,7 @@ function TaskRow({
         {task.estimatedMinutes} 分钟
       </div>
 
-      <div className="flex items-center lg:justify-end">
+      <div className="flex items-center gap-2 lg:justify-end">
         {canUnskip ? (
           <button
             type="button"
@@ -485,6 +741,20 @@ function TaskRow({
             )}
           </button>
         )}
+        <button
+          type="button"
+          title="移出今日计划"
+          aria-label="移出今日计划"
+          disabled={actionPending}
+          onClick={onRemove}
+          className="inline-flex size-9 items-center justify-center rounded-md border border-rose-200 bg-white text-rose-500 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {removePending ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Trash2 className="size-4" aria-hidden="true" />
+          )}
+        </button>
       </div>
     </div>
   )
@@ -540,4 +810,8 @@ function percent(value: number, capacity: number) {
     return 0
   }
   return Math.min(100, Math.round((value / capacity) * 100))
+}
+
+function taskIds(plan: TodayPlan) {
+  return plan.groups.flatMap((group) => group.tasks.map((task) => task.id))
 }

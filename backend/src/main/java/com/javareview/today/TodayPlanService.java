@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashSet;
@@ -24,6 +25,7 @@ import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointRepository;
 import com.javareview.settings.SettingsService;
 import com.javareview.today.TodayDtos.CreateManualTaskRequest;
+import com.javareview.today.TodayDtos.RemoveReviewTasksRequest;
 import com.javareview.today.TodayDtos.ReviewTaskResponse;
 import com.javareview.today.TodayDtos.SummaryMetricResponse;
 import com.javareview.today.TodayDtos.TaskGroupResponse;
@@ -81,7 +83,6 @@ public class TodayPlanService {
 	private TodayPlanResponse fillPlan(User user, LocalDate today, List<ReviewTask> tasks, int capacityMinutes) {
 		List<ReviewTask> newTasks = new ArrayList<>();
 		Set<UUID> plannedReviewPointIds = reviewPointIds(tasks);
-		Set<String> plannedManualPrompts = manualPrompts(tasks);
 		int remainingMinutes = remainingCapacity(tasks, capacityMinutes);
 
 		if (remainingMinutes > 0) {
@@ -90,7 +91,6 @@ public class TodayPlanService {
 					today,
 					remainingMinutes,
 					plannedReviewPointIds,
-					plannedManualPrompts,
 					newTasks);
 		}
 		if (remainingMinutes > 0) {
@@ -125,6 +125,7 @@ public class TodayPlanService {
 	@Transactional
 	public ReviewTaskResponse skipTask(User user, UUID taskId) {
 		ReviewTask task = requireTask(user, taskId);
+		rejectRemovedTask(task);
 		task.skip(Instant.now(clock));
 		return toTaskResponse(task);
 	}
@@ -132,6 +133,7 @@ public class TodayPlanService {
 	@Transactional
 	public ReviewTaskResponse unskipTask(User user, UUID taskId) {
 		ReviewTask task = requireTask(user, taskId);
+		rejectRemovedTask(task);
 		if (task.getStatus() != ReviewTaskStatus.SKIPPED) {
 			throw new IllegalStateException("Only skipped tasks can be restored.");
 		}
@@ -139,9 +141,40 @@ public class TodayPlanService {
 		return toTaskResponse(task);
 	}
 
+	@Transactional
+	public TodayPlanResponse removeTask(User user, UUID taskId) {
+		return removeTasks(user, new RemoveReviewTasksRequest(List.of(taskId)));
+	}
+
+	@Transactional
+	public TodayPlanResponse removeTasks(User user, RemoveReviewTasksRequest request) {
+		LocalDate today = today();
+		Set<UUID> requestedIds = new HashSet<>(request.taskIds());
+		List<ReviewTask> tasks = reviewTaskRepository.findAllByIdsAndUserIdWithPoint(requestedIds, user.getId());
+		if (tasks.size() != requestedIds.size()) {
+			throw new ResourceNotFoundException("Review task not found.");
+		}
+		Instant removedAt = Instant.now(clock);
+		for (ReviewTask task : tasks) {
+			if (!task.getTaskDate().equals(today)) {
+				throw new IllegalArgumentException("Only today's review tasks can be removed.");
+			}
+			if (!task.isRemoved()) {
+				task.removeFromToday(removedAt);
+			}
+		}
+		return toPlanResponse(reviewTaskRepository.findPlan(user.getId(), today), dailyCapacityMinutes(user));
+	}
+
 	private ReviewTask requireTask(User user, UUID taskId) {
 		return reviewTaskRepository.findByIdAndUserIdWithPoint(taskId, user.getId())
 				.orElseThrow(() -> new ResourceNotFoundException("Review task not found."));
+	}
+
+	private static void rejectRemovedTask(ReviewTask task) {
+		if (task.isRemoved()) {
+			throw new IllegalStateException("Review task has been removed from today's plan.");
+		}
 	}
 
 	private int addCarryOverTasks(
@@ -149,37 +182,31 @@ public class TodayPlanService {
 			LocalDate today,
 			int remainingMinutes,
 			Set<UUID> plannedReviewPointIds,
-			Set<String> plannedManualPrompts,
 			List<ReviewTask> newTasks) {
 		List<ReviewTask> carryOverCandidates = reviewTaskRepository.findCarryOverCandidates(
 				user.getId(),
 				today,
 				UNFINISHED_STATUSES);
 		for (ReviewTask oldTask : carryOverCandidates) {
+			if (oldTask.getReviewPoint() == null) {
+				continue;
+			}
+			if (!oldTask.getReviewPoint().getTopic().isSelected()) {
+				continue;
+			}
 			if (remainingMinutes < oldTask.getEstimatedMinutes()) {
 				break;
 			}
-			if (oldTask.getReviewPoint() != null && !plannedReviewPointIds.add(oldTask.getReviewPoint().getId())) {
+			if (!plannedReviewPointIds.add(oldTask.getReviewPoint().getId())) {
 				continue;
 			}
-			if (oldTask.getReviewPoint() == null && !plannedManualPrompts.add(oldTask.getManualPrompt())) {
-				continue;
-			}
-			newTasks.add(oldTask.getReviewPoint() == null
-					? new ReviewTask(
-							user,
-							oldTask.getManualPrompt(),
-							today,
-							ReviewTaskType.CARRY_OVER,
-							reviewPriorityService.forCarryOver(oldTask, today),
-							oldTask.getEstimatedMinutes())
-					: new ReviewTask(
-							user,
-							oldTask.getReviewPoint(),
-							today,
-							ReviewTaskType.CARRY_OVER,
-							reviewPriorityService.forCarryOver(oldTask, today),
-							oldTask.getEstimatedMinutes()));
+			newTasks.add(new ReviewTask(
+					user,
+					oldTask.getReviewPoint(),
+					today,
+					ReviewTaskType.CARRY_OVER,
+					reviewPriorityService.forCarryOver(oldTask, today),
+					oldTask.getEstimatedMinutes()));
 			remainingMinutes -= oldTask.getEstimatedMinutes();
 		}
 		return remainingMinutes;
@@ -196,8 +223,9 @@ public class TodayPlanService {
 				.stream()
 				.filter(point -> plannedReviewPointIds.add(point.getId()))
 				.map(point -> new PrioritizedPoint(point, reviewPriorityService.forReviewPoint(point, today, false)))
-				.sorted(Comparator.comparing(PrioritizedPoint::priority).reversed())
 				.toList();
+		dueCandidates = new ArrayList<>(dueCandidates);
+		Collections.shuffle(dueCandidates);
 		for (PrioritizedPoint candidate : dueCandidates) {
 			if (remainingMinutes < DEFAULT_TASK_MINUTES) {
 				break;
@@ -225,8 +253,9 @@ public class TodayPlanService {
 				.stream()
 				.filter(point -> plannedReviewPointIds.add(point.getId()))
 				.map(point -> new PrioritizedPoint(point, reviewPriorityService.forReviewPoint(point, today, false)))
-				.sorted(Comparator.comparing(PrioritizedPoint::priority).reversed())
 				.toList();
+		newCandidates = new ArrayList<>(newCandidates);
+		Collections.shuffle(newCandidates);
 		int minutesLeft = remainingMinutes;
 		for (PrioritizedPoint candidate : newCandidates) {
 			if (minutesLeft < DEFAULT_TASK_MINUTES) {
@@ -245,15 +274,16 @@ public class TodayPlanService {
 
 	private TodayPlanResponse toPlanResponse(List<ReviewTask> tasks, int capacityMinutes) {
 		List<ReviewTask> orderedTasks = tasks.stream()
+				.filter(task -> !task.isRemoved())
 				.sorted(Comparator
 						.comparing(ReviewTask::getPriorityScore).reversed()
 						.thenComparing(ReviewTask::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder())))
 				.toList();
 		int scheduledMinutes = orderedTasks.stream()
-				.filter(task -> task.getStatus() != ReviewTaskStatus.SKIPPED)
+				.filter(TodayPlanService::countsTowardPlanCapacity)
 				.mapToInt(ReviewTask::getEstimatedMinutes)
 				.sum();
-		int completedMinutes = orderedTasks.stream()
+		int completedMinutes = tasks.stream()
 				.filter(task -> task.getStatus() == ReviewTaskStatus.COMPLETED)
 				.mapToInt(ReviewTask::getEstimatedMinutes)
 				.sum();
@@ -323,7 +353,8 @@ public class TodayPlanService {
 				dueStatus(task),
 				point == null ? null : point.getNextReviewAt(),
 				task.getCreatedAt(),
-				task.getCompletedAt());
+				task.getCompletedAt(),
+				task.getRemovedAt());
 	}
 
 	private String dueStatus(ReviewTask task) {
@@ -370,22 +401,19 @@ public class TodayPlanService {
 		return ids;
 	}
 
-	private static Set<String> manualPrompts(List<ReviewTask> tasks) {
-		Set<String> prompts = new HashSet<>();
-		for (ReviewTask task : tasks) {
-			if (task.getManualPrompt() != null) {
-				prompts.add(task.getManualPrompt());
-			}
-		}
-		return prompts;
-	}
-
 	private static int remainingCapacity(List<ReviewTask> tasks, int capacityMinutes) {
 		int usedMinutes = tasks.stream()
-				.filter(task -> task.getStatus() != ReviewTaskStatus.SKIPPED)
+				.filter(TodayPlanService::countsTowardPlanCapacity)
 				.mapToInt(ReviewTask::getEstimatedMinutes)
 				.sum();
 		return Math.max(0, capacityMinutes - usedMinutes);
+	}
+
+	private static boolean countsTowardPlanCapacity(ReviewTask task) {
+		return !task.isRemoved()
+				&& task.getReviewPoint() != null
+				&& task.getType() != ReviewTaskType.MANUAL
+				&& task.getStatus() != ReviewTaskStatus.SKIPPED;
 	}
 
 	private static String trimRequired(String value, String field) {

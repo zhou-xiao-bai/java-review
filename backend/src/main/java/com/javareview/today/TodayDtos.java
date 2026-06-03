@@ -9,6 +9,8 @@ import java.util.UUID;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 public final class TodayDtos {
@@ -62,7 +64,8 @@ public final class TodayDtos {
 			String dueStatus,
 			Instant nextReviewAt,
 			Instant createdAt,
-			Instant completedAt) {
+			Instant completedAt,
+			Instant removedAt) {
 	}
 
 	public record CreateManualTaskRequest(
@@ -72,5 +75,10 @@ public final class TodayDtos {
 			@Min(1)
 			@Max(120)
 			Integer estimatedMinutes) {
+	}
+
+	public record RemoveReviewTasksRequest(
+			@NotEmpty
+			List<@NotNull UUID> taskIds) {
 	}
 }

@@ -116,6 +116,33 @@ class ReviewSessionServiceTests {
 	}
 
 	@Test
+	void startRejectsRemovedTask() {
+		task.removeFromToday(NOW);
+		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId())).thenReturn(Optional.of(task));
+
+		assertThatThrownBy(() -> reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(task.getId())))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessage("Review task has been removed from today's plan.");
+
+		verify(reviewSessionRepository, never()).save(any());
+		verify(settingsService, never()).findOrDefault(any());
+	}
+
+	@Test
+	void startRestoresExistingActiveSessionForInProgressTask() {
+		task.start();
+		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId())).thenReturn(Optional.of(task));
+		when(reviewSessionRepository.findActiveByTaskIdAndUserId(task.getId(), user.getId())).thenReturn(List.of(session));
+		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(session.getId())).thenReturn(new ArrayList<>());
+
+		var response = reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(task.getId()));
+
+		assertThat(response.id()).isEqualTo(session.getId());
+		verify(reviewSessionRepository, never()).save(any());
+		verify(settingsService, never()).findOrDefault(any());
+	}
+
+	@Test
 	void unknownClosesSessionAndUpdatesReviewPointAsUnstable() {
 		stubActiveSession();
 
