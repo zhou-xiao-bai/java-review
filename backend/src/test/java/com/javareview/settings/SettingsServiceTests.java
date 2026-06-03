@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -51,7 +52,7 @@ class SettingsServiceTests {
 	@Test
 	void apiKeyIsMaskedWhenSettingsAreRead() {
 		UserSettings settings = new UserSettings(user);
-		settings.update("openai-compatible", "https://api.example.com/v1", "sk-test-secret-value", true, "gpt-test", 30, 60);
+		settings.update("default", List.of(new LlmConfig("default", "默认", "openai-compatible", "https://api.example.com/v1", "sk-test-secret-value", "gpt-test")), 30, 60);
 		when(settingsRepository.findByUserId(user.getId())).thenReturn(Optional.of(settings));
 
 		var response = settingsService.getSettings(user);
@@ -59,19 +60,44 @@ class SettingsServiceTests {
 		assertThat(response.llmApiKeyConfigured()).isTrue();
 		assertThat(response.llmApiKeyMasked()).isEqualTo("sk-t****alue");
 		assertThat(response.llmApiKeyMasked()).doesNotContain("secret");
+		assertThat(response.llmConfigs()).hasSize(1);
+		assertThat(response.llmConfigs().getFirst().apiKeyMasked()).isEqualTo("sk-t****alue");
 	}
 
 	@Test
 	void maskedSentinelKeepsExistingApiKey() {
 		UserSettings settings = new UserSettings(user);
-		settings.update("openai-compatible", "https://api.example.com/v1", "sk-original", true, "gpt-test", 30, 60);
+		settings.update("default", List.of(new LlmConfig("default", "默认", "openai-compatible", "https://api.example.com/v1", "sk-original", "gpt-test")), 30, 60);
 		when(settingsRepository.findByUserId(user.getId())).thenReturn(Optional.of(settings));
 		when(settingsRepository.save(settings)).thenReturn(settings);
 
 		settingsService.updateSettings(user, new UpdateSettingsRequest(
-				"openai-compatible", "https://api.example.com/v1", "********", "gpt-next", 40, 70));
+				"default",
+				List.of(new SettingsDtos.LlmConfigRequest("default", "默认", "openai-compatible", "https://api.example.com/v1", "********", "gpt-next")),
+				40,
+				70));
 
 		assertThat(settings.getLlmApiKey()).isEqualTo("sk-original");
 		assertThat(settings.getLlmModel()).isEqualTo("gpt-next");
+	}
+
+	@Test
+	void activeLlmConfigSelectsCurrentEndpoint() {
+		UserSettings settings = new UserSettings(user);
+		when(settingsRepository.findByUserId(user.getId())).thenReturn(Optional.of(settings));
+		when(settingsRepository.save(settings)).thenReturn(settings);
+
+		settingsService.updateSettings(user, new UpdateSettingsRequest(
+				"backup",
+				List.of(
+						new SettingsDtos.LlmConfigRequest("primary", "主站", "openai-compatible", "https://api.primary.test/v1", "sk-primary", "gpt-a"),
+						new SettingsDtos.LlmConfigRequest("backup", "备用", "openai-compatible", "https://api.backup.test/v1", "sk-backup", "gpt-b")),
+				30,
+				60));
+
+		assertThat(settings.getActiveLlmConfigId()).isEqualTo("backup");
+		assertThat(settings.getLlmBaseUrl()).isEqualTo("https://api.backup.test/v1");
+		assertThat(settings.getLlmApiKey()).isEqualTo("sk-backup");
+		assertThat(settings.getLlmModel()).isEqualTo("gpt-b");
 	}
 }

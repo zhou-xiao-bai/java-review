@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.javareview.auth.User;
 import com.javareview.auth.UserRole;
 import com.javareview.settings.UserSettings;
+import com.javareview.settings.LlmConfig;
 import com.sun.net.httpserver.HttpServer;
 
 class OpenAiCompatibleLlmClientTests {
@@ -41,7 +43,7 @@ class OpenAiCompatibleLlmClientTests {
 
 		OpenAiCompatibleLlmClient client = new OpenAiCompatibleLlmClient(WebClient.builder(), new ObjectMapper());
 		UserSettings settings = new UserSettings(new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN));
-		settings.update("openai-compatible", "http://localhost:" + server.getAddress().getPort(), "sk-test", true, "gpt-test", 5, 60);
+		settings.update("default", List.of(new LlmConfig("default", "默认", "openai-compatible", "http://localhost:" + server.getAddress().getPort(), "sk-test", "gpt-test")), 5, 60);
 
 		LlmResult result = client.complete(settings, "system", "user");
 

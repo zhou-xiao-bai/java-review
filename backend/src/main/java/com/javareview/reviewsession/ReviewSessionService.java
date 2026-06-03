@@ -256,15 +256,7 @@ public class ReviewSessionService {
 		if (result.content() != null && !result.content().isBlank()) {
 			return result.content().trim();
 		}
-		return fallbackInitialQuestion(task);
-	}
-
-	private static String fallbackInitialQuestion(ReviewTask task) {
-		String target = taskTitle(task);
-		ReviewPoint point = task.getReviewPoint();
-		String weakPoint = point == null || point.getWeakPoints().isEmpty() ? "核心机制、边界场景和生产排查路径" : String.join("、", point.getWeakPoints());
-		String nextProbe = point == null || point.getNextProbe() == null || point.getNextProbe().isBlank() ? "请结合真实线上场景说明。" : point.getNextProbe();
-		return "请围绕「" + target + "」做一次严格面试回答：先给结论，再说明关键机制、失效边界和排查闭环。重点覆盖：" + weakPoint + "。追问方向：" + nextProbe;
+		throw new IllegalStateException("AI 题目生成失败：" + (result.errorMessage() == null ? "LLM 未返回有效题目。" : result.errorMessage()));
 	}
 
 	private static String taskTitle(ReviewTask task) {

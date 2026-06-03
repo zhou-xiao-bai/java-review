@@ -1,6 +1,8 @@
 package com.javareview.settings;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -12,6 +14,9 @@ import jakarta.persistence.OneToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import com.javareview.auth.User;
 
@@ -39,6 +44,13 @@ public class UserSettings {
 
 	@Column(name = "llm_model", length = 120)
 	private String llmModel = "gpt-4o-mini";
+
+	@Column(name = "active_llm_config_id", length = 80)
+	private String activeLlmConfigId = "default";
+
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(name = "llm_configs", nullable = false, columnDefinition = "jsonb")
+	private List<LlmConfig> llmConfigs = new ArrayList<>();
 
 	@Column(name = "request_timeout_seconds", nullable = false)
 	private int requestTimeoutSeconds = 30;
@@ -76,19 +88,27 @@ public class UserSettings {
 	}
 
 	public String getLlmProvider() {
-		return llmProvider;
+		return activeConfig().provider();
 	}
 
 	public String getLlmBaseUrl() {
-		return llmBaseUrl;
+		return activeConfig().baseUrl();
 	}
 
 	public String getLlmApiKey() {
-		return llmApiKey;
+		return activeConfig().apiKey();
 	}
 
 	public String getLlmModel() {
-		return llmModel;
+		return activeConfig().model();
+	}
+
+	public String getActiveLlmConfigId() {
+		return activeConfig().id();
+	}
+
+	public List<LlmConfig> getLlmConfigs() {
+		return normalizedConfigs();
 	}
 
 	public int getRequestTimeoutSeconds() {
@@ -100,20 +120,32 @@ public class UserSettings {
 	}
 
 	public void update(
-			String llmProvider,
-			String llmBaseUrl,
-			String llmApiKey,
-			boolean replaceApiKey,
-			String llmModel,
+			String activeLlmConfigId,
+			List<LlmConfig> llmConfigs,
 			int requestTimeoutSeconds,
 			int dailyReviewMinutes) {
-		this.llmProvider = llmProvider;
-		this.llmBaseUrl = llmBaseUrl;
-		if (replaceApiKey) {
-			this.llmApiKey = llmApiKey;
-		}
-		this.llmModel = llmModel;
+		this.llmConfigs = new ArrayList<>(llmConfigs);
+		this.activeLlmConfigId = activeLlmConfigId;
+		LlmConfig active = activeConfig();
+		this.llmProvider = active.provider();
+		this.llmBaseUrl = active.baseUrl();
+		this.llmApiKey = active.apiKey();
+		this.llmModel = active.model();
 		this.requestTimeoutSeconds = requestTimeoutSeconds;
 		this.dailyReviewMinutes = dailyReviewMinutes;
+	}
+
+	private LlmConfig activeConfig() {
+		return normalizedConfigs().stream()
+				.filter(config -> config.id().equals(activeLlmConfigId))
+				.findFirst()
+				.orElseGet(() -> normalizedConfigs().getFirst());
+	}
+
+	private List<LlmConfig> normalizedConfigs() {
+		if (llmConfigs == null || llmConfigs.isEmpty()) {
+			return List.of(new LlmConfig("default", "默认中转站", llmProvider, llmBaseUrl, llmApiKey, llmModel));
+		}
+		return llmConfigs;
 	}
 }

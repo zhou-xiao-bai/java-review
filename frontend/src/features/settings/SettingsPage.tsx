@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle2, Loader2, LogOut, PlugZap, Save } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Loader2, LogOut, PlugZap, Plus, Save, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 import {
@@ -13,8 +13,10 @@ import {
   logout,
   testLlmSettings,
   updateSettings,
+  type LlmConfigRequest,
   type UpdateSettingsRequest,
 } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 const settingsQueryKey = ['settings'] as const
 
@@ -47,18 +49,21 @@ export function SettingsPage() {
 
   const initialForm: UpdateSettingsRequest = settingsQuery.data
     ? {
-        llmProvider: settingsQuery.data.llmProvider,
-        llmBaseUrl: settingsQuery.data.llmBaseUrl ?? '',
-        llmApiKey: settingsQuery.data.llmApiKeyConfigured ? '********' : '',
-        llmModel: settingsQuery.data.llmModel,
+        activeLlmConfigId: settingsQuery.data.activeLlmConfigId,
+        llmConfigs: settingsQuery.data.llmConfigs.map((config) => ({
+          id: config.id,
+          name: config.name,
+          provider: config.provider,
+          baseUrl: config.baseUrl ?? '',
+          apiKey: config.apiKeyConfigured ? '********' : '',
+          model: config.model,
+        })),
         requestTimeoutSeconds: settingsQuery.data.requestTimeoutSeconds,
         dailyReviewMinutes: settingsQuery.data.dailyReviewMinutes,
       }
     : {
-        llmProvider: 'openai-compatible',
-        llmBaseUrl: 'https://api.openai.com/v1',
-        llmApiKey: '',
-        llmModel: 'gpt-4o-mini',
+        activeLlmConfigId: 'default',
+        llmConfigs: [defaultConfig('default')],
         requestTimeoutSeconds: 30,
         dailyReviewMinutes: 60,
       }
@@ -78,7 +83,7 @@ export function SettingsPage() {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
         <SettingsForm
-          key={settingsQuery.data ? `${settingsQuery.data.llmModel}-${settingsQuery.data.llmApiKeyMasked}` : 'loading'}
+          key={settingsQuery.data ? `${settingsQuery.data.activeLlmConfigId}-${settingsQuery.data.llmConfigs.length}` : 'loading'}
           form={initialForm}
           saving={saveMutation.isPending}
           saveSuccess={saveMutation.isSuccess}
@@ -128,6 +133,7 @@ function SettingsForm({
   onTest: () => void
 }) {
   const [form, setForm] = useState(initialForm)
+  const activeConfig = form.llmConfigs.find((config) => config.id === form.activeLlmConfigId) ?? form.llmConfigs[0]
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -137,40 +143,51 @@ function SettingsForm({
   return (
     <form className="space-y-4" onSubmit={handleSubmit}>
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-base font-semibold text-slate-950">LLM API 设置</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-semibold text-slate-950">LLM 中转站</h2>
+              <button className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50" type="button" onClick={() => setForm(addConfig(form))}>
+                <Plus className="size-4" />
+                新增
+              </button>
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+              <div className="space-y-2">
+                {form.llmConfigs.map((config) => (
+                  <button key={config.id} className={cn('block w-full rounded-md border px-3 py-2 text-left text-sm', config.id === form.activeLlmConfigId ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50')} type="button" onClick={() => setForm({ ...form, activeLlmConfigId: config.id })}>
+                    <div className="truncate font-medium">{config.name}</div>
+                    <div className="mt-1 truncate text-xs opacity-70">{config.model}</div>
+                  </button>
+                ))}
+              </div>
+              {activeConfig ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="名称">
+                    <input required className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500" value={activeConfig.name} onChange={(event) => setForm(updateConfig(form, activeConfig.id, { name: event.target.value }))} />
+                  </Field>
+                  <Field label="Provider">
+                    <select className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500" value={activeConfig.provider} onChange={(event) => setForm(updateConfig(form, activeConfig.id, { provider: event.target.value }))}>
+                      <option value="openai-compatible">OpenAI Compatible</option>
+                    </select>
+                  </Field>
+                  <Field label="模型名">
+                    <input required className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500" value={activeConfig.model} onChange={(event) => setForm(updateConfig(form, activeConfig.id, { model: event.target.value }))} />
+                  </Field>
+                  <Field label="Base URL">
+                    <input className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500" value={activeConfig.baseUrl} onChange={(event) => setForm(updateConfig(form, activeConfig.id, { baseUrl: event.target.value }))} />
+                  </Field>
+                  <Field label="API Key">
+                    <input className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500" type="password" value={activeConfig.apiKey ?? ''} onChange={(event) => setForm(updateConfig(form, activeConfig.id, { apiKey: event.target.value }))} />
+                  </Field>
+                  <div className="flex items-end">
+                    <button className="inline-flex h-10 items-center gap-2 rounded-md border border-rose-200 bg-white px-3 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60" disabled={form.llmConfigs.length <= 1} type="button" onClick={() => setForm(removeConfig(form, activeConfig.id))}>
+                      <Trash2 className="size-4" />
+                      删除当前中转站
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <Field label="Provider">
-                <select
-                  className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
-                  value={form.llmProvider}
-                  onChange={(event) => setForm({ ...form, llmProvider: event.target.value })}
-                >
-                  <option value="openai-compatible">OpenAI Compatible</option>
-                </select>
-              </Field>
-              <Field label="模型名">
-                <input
-                  required
-                  className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
-                  value={form.llmModel}
-                  onChange={(event) => setForm({ ...form, llmModel: event.target.value })}
-                />
-              </Field>
-              <Field label="Base URL">
-                <input
-                  className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
-                  value={form.llmBaseUrl}
-                  onChange={(event) => setForm({ ...form, llmBaseUrl: event.target.value })}
-                />
-              </Field>
-              <Field label="API Key">
-                <input
-                  className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
-                  type="password"
-                  value={form.llmApiKey}
-                  onChange={(event) => setForm({ ...form, llmApiKey: event.target.value })}
-                />
-              </Field>
               <Field label="请求超时（秒）">
                 <input
                   min={1}
@@ -247,4 +264,33 @@ function InlineStatus({ text }: { text: string }) {
       {text}
     </div>
   )
+}
+
+function defaultConfig(id = `config-${Date.now()}`): LlmConfigRequest {
+  return {
+    id,
+    name: '默认中转站',
+    provider: 'openai-compatible',
+    baseUrl: 'https://api.openai.com/v1',
+    apiKey: '',
+    model: 'gpt-4o-mini',
+  }
+}
+
+function addConfig(form: UpdateSettingsRequest): UpdateSettingsRequest {
+  const config = { ...defaultConfig(), name: `中转站 ${form.llmConfigs.length + 1}` }
+  return { ...form, activeLlmConfigId: config.id, llmConfigs: [...form.llmConfigs, config] }
+}
+
+function updateConfig(form: UpdateSettingsRequest, id: string, patch: Partial<LlmConfigRequest>): UpdateSettingsRequest {
+  return {
+    ...form,
+    llmConfigs: form.llmConfigs.map((config) => (config.id === id ? { ...config, ...patch } : config)),
+  }
+}
+
+function removeConfig(form: UpdateSettingsRequest, id: string): UpdateSettingsRequest {
+  const nextConfigs = form.llmConfigs.filter((config) => config.id !== id)
+  const activeLlmConfigId = form.activeLlmConfigId === id ? nextConfigs[0]?.id ?? form.activeLlmConfigId : form.activeLlmConfigId
+  return { ...form, activeLlmConfigId, llmConfigs: nextConfigs }
 }

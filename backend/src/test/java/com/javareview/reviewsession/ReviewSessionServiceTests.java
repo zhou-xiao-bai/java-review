@@ -1,6 +1,7 @@
 package com.javareview.reviewsession;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -98,6 +99,20 @@ class ReviewSessionServiceTests {
 		assertThat(response.turns()).hasSize(1);
 		assertThat(response.turns().getFirst().content()).isEqualTo("事务代理在什么情况下会失效？");
 		verify(llmClient).complete(eq(settings), any(), org.mockito.ArgumentMatchers.contains("复习点：事务代理生效边界"));
+	}
+
+	@Test
+	void startFailsWhenLlmDoesNotGenerateQuestion() {
+		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId())).thenReturn(Optional.of(task));
+		when(reviewSessionRepository.save(any(ReviewSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+		UserSettings settings = new UserSettings(user);
+		when(settingsService.findOrDefault(user)).thenReturn(settings);
+		when(llmClient.complete(eq(settings), any(), any())).thenReturn(LlmResult.failure("连接失败"));
+
+		assertThatThrownBy(() -> reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(task.getId())))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("AI 题目生成失败")
+				.hasMessageContaining("连接失败");
 	}
 
 	@Test

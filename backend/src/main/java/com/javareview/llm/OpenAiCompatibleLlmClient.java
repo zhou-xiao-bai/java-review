@@ -30,7 +30,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 	@Override
 	public LlmResult complete(UserSettings settings, String systemPrompt, String userPrompt) {
 		if (!configured(settings)) {
-			return LlmResult.failure("LLM API key is not configured; local fallback is used.");
+			return LlmResult.failure("LLM API key is not configured.");
 		}
 		try {
 			String baseUrl = normalizeBaseUrl(settings.getLlmBaseUrl());
@@ -77,7 +77,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 	@Override
 	public LlmTestResponse test(UserSettings settings) {
 		if (!configured(settings)) {
-			return new LlmTestResponse(true, "未配置 API Key，将使用本地结构化 fallback。", settings.getLlmProvider(), settings.getLlmModel());
+			return new LlmTestResponse(false, "未配置 API Key。", settings.getLlmProvider(), settings.getLlmModel());
 		}
 		LlmResult result = complete(settings, "Return only OK.", "Respond with OK.");
 		return new LlmTestResponse(result.success(), result.success() ? "连接测试成功。" : result.errorMessage(),

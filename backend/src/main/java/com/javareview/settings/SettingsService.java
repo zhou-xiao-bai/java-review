@@ -1,11 +1,18 @@
 package com.javareview.settings;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.javareview.auth.User;
 import com.javareview.llm.LlmClient;
 import com.javareview.settings.SettingsDtos.LlmTestResponse;
+import com.javareview.settings.SettingsDtos.LlmConfigResponse;
 import com.javareview.settings.SettingsDtos.SettingsResponse;
 import com.javareview.settings.SettingsDtos.UpdateSettingsRequest;
 
@@ -34,14 +41,10 @@ public class SettingsService {
 	@Transactional
 	public SettingsResponse updateSettings(User user, UpdateSettingsRequest request) {
 		UserSettings settings = findOrDefault(user);
-		String apiKey = normalizeOptional(request.llmApiKey());
-		boolean replaceApiKey = apiKey != null && !MASKED_KEY_SENTINEL.equals(apiKey);
+		List<LlmConfig> configs = normalizeConfigs(settings, request);
 		settings.update(
-				trimRequired(request.llmProvider(), "llmProvider"),
-				normalizeOptional(request.llmBaseUrl()),
-				apiKey,
-				replaceApiKey,
-				trimRequired(request.llmModel(), "llmModel"),
+				trimRequired(request.activeLlmConfigId(), "activeLlmConfigId"),
+				configs,
 				request.requestTimeoutSeconds(),
 				request.dailyReviewMinutes());
 		return toResponse(settingsRepository.save(settings));
@@ -67,8 +70,50 @@ public class SettingsService {
 				mask(apiKey),
 				apiKey != null && !apiKey.isBlank(),
 				settings.getLlmModel(),
+				settings.getActiveLlmConfigId(),
+				settings.getLlmConfigs().stream().map(SettingsService::toConfigResponse).toList(),
 				settings.getRequestTimeoutSeconds(),
 				settings.getDailyReviewMinutes());
+	}
+
+	private static LlmConfigResponse toConfigResponse(LlmConfig config) {
+		String apiKey = config.apiKey();
+		return new LlmConfigResponse(
+				config.id(),
+				config.name(),
+				config.provider(),
+				config.baseUrl(),
+				mask(apiKey),
+				apiKey != null && !apiKey.isBlank(),
+				config.model());
+	}
+
+	private static List<LlmConfig> normalizeConfigs(UserSettings settings, UpdateSettingsRequest request) {
+		Map<String, LlmConfig> existingById = settings.getLlmConfigs().stream()
+				.collect(Collectors.toMap(LlmConfig::id, Function.identity(), (left, right) -> left));
+		HashSet<String> ids = new HashSet<>();
+		List<LlmConfig> configs = request.llmConfigs().stream().map(config -> {
+			String id = trimRequired(config.id(), "llmConfigs.id");
+			if (!ids.add(id)) {
+				throw new IllegalArgumentException("LLM config id must be unique.");
+			}
+			String apiKey = normalizeOptional(config.apiKey());
+			if (apiKey != null && MASKED_KEY_SENTINEL.equals(apiKey)) {
+				apiKey = existingById.get(id) == null ? null : existingById.get(id).apiKey();
+			}
+			return new LlmConfig(
+					id,
+					trimRequired(config.name(), "llmConfigs.name"),
+					trimRequired(config.provider(), "llmConfigs.provider"),
+					normalizeOptional(config.baseUrl()),
+					apiKey,
+					trimRequired(config.model(), "llmConfigs.model"));
+		}).toList();
+		boolean activeExists = configs.stream().anyMatch(config -> config.id().equals(request.activeLlmConfigId()));
+		if (!activeExists) {
+			throw new IllegalArgumentException("activeLlmConfigId must reference an existing LLM config.");
+		}
+		return configs;
 	}
 
 	private static String mask(String apiKey) {

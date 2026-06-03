@@ -288,17 +288,36 @@ export type SettingsResponse = {
   llmApiKeyMasked: string
   llmApiKeyConfigured: boolean
   llmModel: string
+  activeLlmConfigId: string
+  llmConfigs: LlmConfigResponse[]
   requestTimeoutSeconds: number
   dailyReviewMinutes: number
 }
 
+export type LlmConfigResponse = {
+  id: string
+  name: string
+  provider: string
+  baseUrl: string | null
+  apiKeyMasked: string
+  apiKeyConfigured: boolean
+  model: string
+}
+
 export type UpdateSettingsRequest = {
-  llmProvider: string
-  llmBaseUrl: string
-  llmApiKey?: string
-  llmModel: string
+  activeLlmConfigId: string
+  llmConfigs: LlmConfigRequest[]
   requestTimeoutSeconds: number
   dailyReviewMinutes: number
+}
+
+export type LlmConfigRequest = {
+  id: string
+  name: string
+  provider: string
+  baseUrl: string
+  apiKey?: string
+  model: string
 }
 
 export type LlmTestResponse = {
