@@ -486,3 +486,82 @@ export function getDueReviewPoints() {
 export function getRecentReviewSessions() {
   return apiRequest<RecentReviewSession[]>('/api/progress/recent-sessions')
 }
+
+export type ProjectCase = {
+  id: string
+  name: string
+  background: string | null
+  responsibility: string | null
+  techStack: string[]
+  highlights: string[]
+  weakPoints: string[]
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export type ProjectCaseRequest = {
+  name: string
+  background: string
+  responsibility: string
+  techStack: string[]
+  highlights: string[]
+}
+
+export type ProjectEvaluation = {
+  overallComment: string
+  score: {
+    businessExpression: number
+    technicalDesign: number
+    tradeoffDecision: number
+    metricsEvidence: number
+    troubleshootingLoop: number
+    interviewPressure: number
+    overall: number
+  }
+  weakPoints: string[]
+  suggestedTopics: string[]
+}
+
+export type ProjectTurn = {
+  id: string
+  role: string
+  content: string
+  createdAt: string | null
+}
+
+export type ProjectSession = {
+  id: string
+  projectCaseId: string
+  status: string
+  finalScore: number | null
+  evaluation: ProjectEvaluation | null
+  suggestedTopics: string[]
+  turns: ProjectTurn[]
+}
+
+export function getProjectCases() {
+  return apiRequest<ProjectCase[]>('/api/project-cases')
+}
+
+export function createProjectCase(body: ProjectCaseRequest) {
+  return apiRequest<ProjectCase>('/api/project-cases', { method: 'POST', body })
+}
+
+export function updateProjectCase(id: string, body: ProjectCaseRequest) {
+  return apiRequest<ProjectCase>(`/api/project-cases/${id}`, { method: 'PUT', body })
+}
+
+export function deleteProjectCase(id: string) {
+  return apiRequest<void>(`/api/project-cases/${id}`, { method: 'DELETE' })
+}
+
+export function startProjectSession(projectCaseId: string) {
+  return apiRequest<ProjectSession>(`/api/project-cases/${projectCaseId}/sessions`, { method: 'POST' })
+}
+
+export function answerProjectSession(sessionId: string, answer: string) {
+  return apiRequest<ProjectSession>(`/api/project-sessions/${sessionId}/answer`, {
+    method: 'POST',
+    body: { answer },
+  })
+}
