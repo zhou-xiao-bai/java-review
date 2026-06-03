@@ -102,12 +102,12 @@ export function LoginPage() {
             Java Review
           </div>
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">
-            {initialized ? 'Sign in' : 'Create administrator'}
+            {initialized ? '登录' : '创建管理员'}
           </h1>
           <p className="mt-2 text-sm leading-6 text-slate-600">
             {initialized
-              ? 'Use your administrator account to enter the review workspace.'
-              : 'Create the first local administrator account for this instance.'}
+              ? '使用管理员账号进入复习工作台。'
+              : '为当前实例创建第一个本地管理员账号。'}
           </p>
         </div>
 
@@ -120,7 +120,7 @@ export function LoginPage() {
         {initialized ? (
           <form className="space-y-4" onSubmit={handleLoginSubmit}>
             <label className="block text-sm font-medium text-slate-700">
-              Username or email
+              用户名或邮箱
               <input
                 required
                 className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
@@ -129,7 +129,7 @@ export function LoginPage() {
               />
             </label>
             <label className="block text-sm font-medium text-slate-700">
-              Password
+              密码
               <input
                 required
                 className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
@@ -146,20 +146,20 @@ export function LoginPage() {
                 checked={rememberMe}
                 onChange={(event) => setRememberMe(event.target.checked)}
               />
-              Remember this browser
+              记住此浏览器
             </label>
             <button
               disabled={loading}
               type="submit"
               className="h-10 w-full rounded-md bg-slate-900 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loginMutation.isPending ? 'Signing in...' : 'Sign in'}
+              {loginMutation.isPending ? '登录中...' : '登录'}
             </button>
           </form>
         ) : (
           <form className="space-y-4" onSubmit={handleBootstrapSubmit}>
             <label className="block text-sm font-medium text-slate-700">
-              Username
+              用户名
               <input
                 required
                 className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
@@ -169,7 +169,7 @@ export function LoginPage() {
               />
             </label>
             <label className="block text-sm font-medium text-slate-700">
-              Email
+              邮箱
               <input
                 className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
                 type="email"
@@ -178,7 +178,7 @@ export function LoginPage() {
               />
             </label>
             <label className="block text-sm font-medium text-slate-700">
-              Display name
+              显示名称
               <input
                 required
                 className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
@@ -187,7 +187,7 @@ export function LoginPage() {
               />
             </label>
             <label className="block text-sm font-medium text-slate-700">
-              Password
+              密码
               <input
                 required
                 className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
@@ -203,8 +203,8 @@ export function LoginPage() {
               className="h-10 w-full rounded-md bg-slate-900 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {bootstrapMutation.isPending
-                ? 'Creating account...'
-                : 'Create administrator'}
+                ? '创建中...'
+                : '创建管理员'}
             </button>
           </form>
         )}
