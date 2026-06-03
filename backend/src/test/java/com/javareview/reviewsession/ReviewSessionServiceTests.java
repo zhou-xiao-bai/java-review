@@ -2,6 +2,7 @@ package com.javareview.reviewsession;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -25,6 +26,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.javareview.auth.User;
 import com.javareview.auth.UserRole;
 import com.javareview.llm.LlmClient;
+import com.javareview.llm.LlmResult;
 import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointStatus;
 import com.javareview.settings.SettingsService;
@@ -54,6 +56,9 @@ class ReviewSessionServiceTests {
 	@Mock
 	private SettingsService settingsService;
 
+	@Mock
+	private LlmClient llmClient;
+
 	private ReviewSessionService reviewSessionService;
 	private User user;
 	private ReviewTask task;
@@ -67,7 +72,7 @@ class ReviewSessionServiceTests {
 				reviewSessionRepository,
 				reviewTurnRepository,
 				settingsService,
-				mock(LlmClient.class),
+				llmClient,
 				new ObjectMapper().findAndRegisterModules(),
 				Clock.fixed(NOW, ZoneOffset.UTC));
 		user = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
@@ -76,13 +81,29 @@ class ReviewSessionServiceTests {
 		point = new ReviewPoint(topic, "事务代理生效边界", 5, 4, 5, "next probe");
 		task = new ReviewTask(user, point, LocalDate.of(2026, 6, 3), ReviewTaskType.NEW, java.math.BigDecimal.TEN, 10);
 		session = new ReviewSession(user, task, NOW);
-		when(reviewSessionRepository.findByIdAndUserIdWithTask(session.getId(), user.getId())).thenReturn(Optional.of(session));
+	}
+
+	@Test
+	void startGeneratesInitialQuestionFromReviewPointWithLlm() {
+		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId())).thenReturn(Optional.of(task));
+		when(reviewSessionRepository.save(any(ReviewSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(reviewTurnRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(session.getId())).thenReturn(new ArrayList<>());
+		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(any())).thenAnswer(invocation -> List.of(new ReviewTurn(new ReviewSession(user, task, NOW), ReviewTurnRole.AI, ReviewTurnType.QUESTION, "事务代理在什么情况下会失效？")));
+		UserSettings settings = new UserSettings(user);
+		when(settingsService.findOrDefault(user)).thenReturn(settings);
+		when(llmClient.complete(eq(settings), any(), any())).thenReturn(LlmResult.success("事务代理在什么情况下会失效？"));
+
+		var response = reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(task.getId()));
+
+		assertThat(response.turns()).hasSize(1);
+		assertThat(response.turns().getFirst().content()).isEqualTo("事务代理在什么情况下会失效？");
+		verify(llmClient).complete(eq(settings), any(), org.mockito.ArgumentMatchers.contains("复习点：事务代理生效边界"));
 	}
 
 	@Test
 	void unknownClosesSessionAndUpdatesReviewPointAsUnstable() {
+		stubActiveSession();
+
 		var response = reviewSessionService.unknown(user, session.getId());
 
 		assertThat(response.status()).isEqualTo("evaluated");
@@ -94,6 +115,7 @@ class ReviewSessionServiceTests {
 
 	@Test
 	void skipDoesNotUpdateReviewPointMastery() {
+		stubActiveSession();
 		var originalMastery = point.getMastery();
 
 		var response = reviewSessionService.skip(user, session.getId());
@@ -103,5 +125,11 @@ class ReviewSessionServiceTests {
 		assertThat(point.getMastery()).isEqualByComparingTo(originalMastery);
 		assertThat(point.getReviewCount()).isZero();
 		verify(settingsService, never()).findOrDefault(any());
+	}
+
+	private void stubActiveSession() {
+		when(reviewSessionRepository.findByIdAndUserIdWithTask(session.getId(), user.getId())).thenReturn(Optional.of(session));
+		when(reviewTurnRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(session.getId())).thenReturn(new ArrayList<>());
 	}
 }

@@ -64,7 +64,7 @@ public class ReviewSessionService {
 		ReviewTask task = requireTask(user, request.taskId());
 		task.start();
 		ReviewSession session = reviewSessionRepository.save(new ReviewSession(user, task, Instant.now(clock)));
-		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION, initialQuestion(task)));
+		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION, generateInitialQuestion(user, task)));
 		return toResponse(session);
 	}
 
@@ -250,8 +250,21 @@ public class ReviewSessionService {
 		};
 	}
 
-	private static String initialQuestion(ReviewTask task) {
-		return "请用严格面试的方式回答：" + taskTitle(task) + "。先给结论，再说明核心机制、边界场景和生产排查路径。";
+	private String generateInitialQuestion(User user, ReviewTask task) {
+		UserSettings settings = settingsService.findOrDefault(user);
+		LlmResult result = llmClient.complete(settings, questionSystemPrompt(), questionPrompt(task));
+		if (result.content() != null && !result.content().isBlank()) {
+			return result.content().trim();
+		}
+		return fallbackInitialQuestion(task);
+	}
+
+	private static String fallbackInitialQuestion(ReviewTask task) {
+		String target = taskTitle(task);
+		ReviewPoint point = task.getReviewPoint();
+		String weakPoint = point == null || point.getWeakPoints().isEmpty() ? "核心机制、边界场景和生产排查路径" : String.join("、", point.getWeakPoints());
+		String nextProbe = point == null || point.getNextProbe() == null || point.getNextProbe().isBlank() ? "请结合真实线上场景说明。" : point.getNextProbe();
+		return "请围绕「" + target + "」做一次严格面试回答：先给结论，再说明关键机制、失效边界和排查闭环。重点覆盖：" + weakPoint + "。追问方向：" + nextProbe;
 	}
 
 	private static String taskTitle(ReviewTask task) {
@@ -260,6 +273,27 @@ public class ReviewSessionService {
 
 	private static String reviewSystemPrompt() {
 		return "你是严格的高级 Java 面试官。只输出 JSON 或一个追问问题，不提前泄露参考答案。";
+	}
+
+	private static String questionSystemPrompt() {
+		return "你是严格的高级 Java 面试官。根据复习点实时生成一道题，只输出题目本身，不输出参考答案、评分标准或解释。题目必须具体、可回答、能暴露机制理解和生产经验。";
+	}
+
+	private static String questionPrompt(ReviewTask task) {
+		ReviewPoint point = task.getReviewPoint();
+		if (point == null) {
+			return "手动复习任务：" + task.getManualPrompt() + "\n请生成一道严格面试复习题。";
+		}
+		return "主题：" + point.getTopic().getTitle()
+				+ "\n复习点：" + point.getTitle()
+				+ "\n重要度：" + point.getImportance()
+				+ "\n难度：" + point.getDifficulty()
+				+ "\n面试频率：" + point.getInterviewFrequency()
+				+ "\n当前掌握分：" + point.getMastery()
+				+ "\n当前状态：" + point.getStatus()
+				+ "\n历史弱点：" + (point.getWeakPoints().isEmpty() ? "暂无" : String.join("；", point.getWeakPoints()))
+				+ "\n下一次探针：" + (point.getNextProbe() == null || point.getNextProbe().isBlank() ? "暂无" : point.getNextProbe())
+				+ "\n请生成一道针对这个复习点的实时面试题。";
 	}
 
 	private static String answerPrompt(ReviewSession session, String answer) {

@@ -165,6 +165,10 @@ public class ReviewPoint {
 		return weakPoints;
 	}
 
+	public String getNextProbe() {
+		return nextProbe;
+	}
+
 	public void updateReviewProgress(
 			BigDecimal mastery,
 			ReviewPointStatus status,
