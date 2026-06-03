@@ -402,3 +402,87 @@ export function skipReviewSession(id: string) {
     method: 'POST',
   })
 }
+
+export type ProgressOverview = {
+  overallMastery: number
+  selectedTopicCount: number
+  reviewPointCount: number
+  unstablePointCount: number
+  dueReviewPointCount: number
+  completedSessionCount: number
+}
+
+export type DomainProgress = {
+  domainId: string
+  domainName: string
+  topicCount: number
+  reviewPointCount: number
+  averageMastery: number
+  unstablePointCount: number
+}
+
+export type TopicProgress = {
+  topicId: string
+  topicTitle: string
+  domainName: string
+  status: string
+  reviewPointCount: number
+  unstablePointCount: number
+  averageMastery: number
+  nextReviewAt: string | null
+  weakPointSummary: string[]
+}
+
+export type WeakPointProgress = {
+  weakPoint: string
+  topicTitle: string
+  pointTitle: string
+  mastery: number
+}
+
+export type DueReviewPoint = {
+  reviewPointId: string
+  topicTitle: string
+  pointTitle: string
+  status: string
+  mastery: number
+  nextReviewAt: string | null
+}
+
+export type RecentReviewSession = {
+  sessionId: string
+  topicTitle: string | null
+  pointTitle: string | null
+  manualPrompt: string | null
+  status: string
+  finalScore: number | null
+  startedAt: string
+  endedAt: string | null
+}
+
+export function getProgressOverview() {
+  return apiRequest<ProgressOverview>('/api/progress/overview')
+}
+
+export function getProgressDomains() {
+  return apiRequest<DomainProgress[]>('/api/progress/domains')
+}
+
+export function getProgressTopics(status?: string) {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  const query = params.toString()
+  return apiRequest<TopicProgress[]>(`/api/progress/topics${query ? `?${query}` : ''}`)
+}
+
+export function getWeakPoints() {
+  return apiRequest<WeakPointProgress[]>('/api/progress/weak-points')
+}
+
+export function getDueReviewPoints() {
+  return apiRequest<DueReviewPoint[]>('/api/progress/due-review-points')
+}
+
+export function getRecentReviewSessions() {
+  return apiRequest<RecentReviewSession[]>('/api/progress/recent-sessions')
+}

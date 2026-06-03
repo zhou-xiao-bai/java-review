@@ -1,0 +1,69 @@
+package com.javareview.progress;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+
+public final class ProgressDtos {
+
+	private ProgressDtos() {
+	}
+
+	public record ProgressOverviewResponse(
+			BigDecimal overallMastery,
+			long selectedTopicCount,
+			long reviewPointCount,
+			long unstablePointCount,
+			long dueReviewPointCount,
+			long completedSessionCount) {
+	}
+
+	public record DomainProgressResponse(
+			UUID domainId,
+			String domainName,
+			long topicCount,
+			long reviewPointCount,
+			BigDecimal averageMastery,
+			long unstablePointCount) {
+	}
+
+	public record TopicProgressResponse(
+			UUID topicId,
+			String topicTitle,
+			String domainName,
+			String status,
+			long reviewPointCount,
+			long unstablePointCount,
+			BigDecimal averageMastery,
+			Instant nextReviewAt,
+			List<String> weakPointSummary) {
+	}
+
+	public record WeakPointResponse(
+			String weakPoint,
+			String topicTitle,
+			String pointTitle,
+			BigDecimal mastery) {
+	}
+
+	public record DueReviewPointResponse(
+			UUID reviewPointId,
+			String topicTitle,
+			String pointTitle,
+			String status,
+			BigDecimal mastery,
+			Instant nextReviewAt) {
+	}
+
+	public record RecentSessionResponse(
+			UUID sessionId,
+			String topicTitle,
+			String pointTitle,
+			String manualPrompt,
+			String status,
+			BigDecimal finalScore,
+			Instant startedAt,
+			Instant endedAt) {
+	}
+}
