@@ -9,6 +9,8 @@ import com.javareview.settings.SettingsDtos.LlmTestResponse;
 import com.javareview.settings.SettingsDtos.SettingsResponse;
 import com.javareview.settings.SettingsDtos.UpdateSettingsRequest;
 
+import jakarta.persistence.EntityManager;
+
 @Service
 public class SettingsService {
 
@@ -16,10 +18,12 @@ public class SettingsService {
 
 	private final UserSettingsRepository settingsRepository;
 	private final LlmClient llmClient;
+	private final EntityManager entityManager;
 
-	public SettingsService(UserSettingsRepository settingsRepository, LlmClient llmClient) {
+	public SettingsService(UserSettingsRepository settingsRepository, LlmClient llmClient, EntityManager entityManager) {
 		this.settingsRepository = settingsRepository;
 		this.llmClient = llmClient;
+		this.entityManager = entityManager;
 	}
 
 	@Transactional(readOnly = true)
@@ -51,7 +55,8 @@ public class SettingsService {
 
 	@Transactional(readOnly = true)
 	public UserSettings findOrDefault(User user) {
-		return settingsRepository.findByUserId(user.getId()).orElseGet(() -> new UserSettings(user));
+		return settingsRepository.findByUserId(user.getId())
+				.orElseGet(() -> new UserSettings(entityManager.getReference(User.class, user.getId())));
 	}
 
 	private static SettingsResponse toResponse(UserSettings settings) {

@@ -17,19 +17,35 @@ import com.javareview.auth.UserRole;
 import com.javareview.llm.LlmClient;
 import com.javareview.settings.SettingsDtos.UpdateSettingsRequest;
 
+import jakarta.persistence.EntityManager;
+
 @ExtendWith(MockitoExtension.class)
 class SettingsServiceTests {
 
 	@Mock
 	private UserSettingsRepository settingsRepository;
 
+	@Mock
+	private EntityManager entityManager;
+
 	private SettingsService settingsService;
 	private User user;
 
 	@BeforeEach
 	void setUp() {
-		settingsService = new SettingsService(settingsRepository, mock(LlmClient.class));
+		settingsService = new SettingsService(settingsRepository, mock(LlmClient.class), entityManager);
 		user = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
+	}
+
+	@Test
+	void defaultSettingsUseManagedUserReference() {
+		User managedUser = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
+		when(settingsRepository.findByUserId(user.getId())).thenReturn(Optional.empty());
+		when(entityManager.getReference(User.class, user.getId())).thenReturn(managedUser);
+
+		UserSettings settings = settingsService.findOrDefault(user);
+
+		assertThat(settings.getUser()).isSameAs(managedUser);
 	}
 
 	@Test
