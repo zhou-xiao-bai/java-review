@@ -281,3 +281,124 @@ export function skipReviewTask(id: string) {
     method: 'PATCH',
   })
 }
+
+export type SettingsResponse = {
+  llmProvider: string
+  llmBaseUrl: string | null
+  llmApiKeyMasked: string
+  llmApiKeyConfigured: boolean
+  llmModel: string
+  requestTimeoutSeconds: number
+  dailyReviewMinutes: number
+}
+
+export type UpdateSettingsRequest = {
+  llmProvider: string
+  llmBaseUrl: string
+  llmApiKey?: string
+  llmModel: string
+  requestTimeoutSeconds: number
+  dailyReviewMinutes: number
+}
+
+export type LlmTestResponse = {
+  success: boolean
+  message: string
+  provider: string
+  model: string
+}
+
+export function getSettings() {
+  return apiRequest<SettingsResponse>('/api/settings')
+}
+
+export function updateSettings(body: UpdateSettingsRequest) {
+  return apiRequest<SettingsResponse>('/api/settings', {
+    method: 'PUT',
+    body,
+  })
+}
+
+export function testLlmSettings() {
+  return apiRequest<LlmTestResponse>('/api/settings/llm/test', {
+    method: 'POST',
+  })
+}
+
+export type ReviewEvaluation = {
+  overallComment: string
+  correctPoints: string[]
+  missingPoints: string[]
+  inaccuratePoints: string[]
+  referenceAnswer: string
+  score: {
+    conclusionAccuracy: number
+    mechanismExplanation: number
+    boundaryCases: number
+    transferApplication: number
+    overall: number
+  }
+  weakPoints: string[]
+  nextProbe: string
+  nextStatus: string
+}
+
+export type ReviewTurn = {
+  id: string
+  role: 'ai' | 'user' | 'system' | string
+  turnType: string
+  content: string
+  createdAt: string | null
+}
+
+export type ReviewSession = {
+  id: string
+  taskId: string
+  status: 'active' | 'evaluated' | 'abandoned' | string
+  topicTitle: string | null
+  pointTitle: string | null
+  manualPrompt: string | null
+  startedAt: string
+  endedAt: string | null
+  finalScore: number | null
+  summary: string | null
+  evaluation: ReviewEvaluation | null
+  turns: ReviewTurn[]
+}
+
+export function startReviewSession(taskId: string) {
+  return apiRequest<ReviewSession>('/api/review-sessions', {
+    method: 'POST',
+    body: { taskId },
+  })
+}
+
+export function getReviewSession(id: string) {
+  return apiRequest<ReviewSession>(`/api/review-sessions/${id}`)
+}
+
+export function answerReviewSession(id: string, answer: string) {
+  return apiRequest<ReviewSession>(`/api/review-sessions/${id}/answer`, {
+    method: 'POST',
+    body: { answer },
+  })
+}
+
+export function unknownReviewSession(id: string) {
+  return apiRequest<ReviewSession>(`/api/review-sessions/${id}/unknown`, {
+    method: 'POST',
+  })
+}
+
+export function clarifyReviewSession(id: string, question?: string) {
+  return apiRequest<ReviewSession>(`/api/review-sessions/${id}/clarify`, {
+    method: 'POST',
+    body: { question: question ?? '' },
+  })
+}
+
+export function skipReviewSession(id: string) {
+  return apiRequest<ReviewSession>(`/api/review-sessions/${id}/skip`, {
+    method: 'POST',
+  })
+}

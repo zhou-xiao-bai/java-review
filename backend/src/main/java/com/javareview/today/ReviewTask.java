@@ -148,4 +148,13 @@ public class ReviewTask {
 		this.status = ReviewTaskStatus.SKIPPED;
 		this.completedAt = skippedAt;
 	}
+
+	public void start() {
+		this.status = ReviewTaskStatus.IN_PROGRESS;
+	}
+
+	public void complete(Instant completedAt) {
+		this.status = ReviewTaskStatus.COMPLETED;
+		this.completedAt = completedAt;
+	}
 }

@@ -3,6 +3,7 @@ package com.javareview.today;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,6 +11,19 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReviewTaskRepository extends JpaRepository<ReviewTask, UUID> {
+
+	@Query("""
+			select task
+			from ReviewTask task
+			left join fetch task.reviewPoint point
+			left join fetch point.topic topic
+			left join fetch topic.domain domain
+			where task.id = :id
+			and task.user.id = :userId
+			""")
+	Optional<ReviewTask> findByIdAndUserIdWithPoint(
+			@Param("id") UUID id,
+			@Param("userId") UUID userId);
 
 	@Query("""
 			select task
