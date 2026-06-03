@@ -1,0 +1,24 @@
+server:
+  forward-headers-strategy: framework
+
+spring:
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
+  jpa:
+    properties:
+      hibernate:
+        format_sql: false
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+app:
+  security:
+    remember-me:
+      key: ${REMEMBER_ME_KEY}
+      token-validity-seconds: ${REMEMBER_ME_SECONDS:1209600}
