@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -29,6 +30,8 @@ import com.javareview.auth.UserRole;
 import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointRepository;
 import com.javareview.reviewpoint.ReviewPointStatus;
+import com.javareview.settings.SettingsService;
+import com.javareview.settings.UserSettings;
 import com.javareview.today.TodayDtos.TodayPlanResponse;
 import com.javareview.topic.Domain;
 import com.javareview.topic.Topic;
@@ -45,6 +48,9 @@ class TodayPlanServiceTests {
 	@Mock
 	private ReviewPointRepository reviewPointRepository;
 
+	@Mock
+	private SettingsService settingsService;
+
 	private TodayPlanService todayPlanService;
 	private User user;
 	private Topic topic;
@@ -52,12 +58,15 @@ class TodayPlanServiceTests {
 	@BeforeEach
 	void setUp() {
 		Clock clock = Clock.fixed(TODAY.atStartOfDay().toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+		user = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
+		UserSettings settings = new UserSettings(user);
+		lenient().when(settingsService.findOrDefault(user)).thenReturn(settings);
 		todayPlanService = new TodayPlanService(
 				reviewTaskRepository,
 				reviewPointRepository,
 				new ReviewPriorityService(clock),
+				settingsService,
 				clock);
-		user = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
 		topic = new Topic(new Domain(java.util.UUID.randomUUID(), "spring", "Spring", 40),
 				"spring-transactions", "Spring 事务", TopicSource.BUILTIN, true);
 	}
@@ -138,6 +147,34 @@ class TodayPlanServiceTests {
 
 		assertThat(response.scheduledMinutes()).isEqualTo(60);
 		assertThat(response.groups().get(1).tasks()).hasSize(6);
+	}
+
+	@Test
+	void generatedPlanUsesConfiguredDailyCapacity() {
+		UserSettings settings = new UserSettings(user);
+		settings.update(
+				"default",
+				List.of(),
+				30,
+				120);
+		when(settingsService.findOrDefault(user)).thenReturn(settings);
+		List<ReviewPoint> duePoints = new ArrayList<>();
+		for (int index = 0; index < 14; index++) {
+			duePoints.add(duePoint("到期点 " + index, 5, 5, 5, TODAY.minusDays(index + 1L)));
+		}
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.findCarryOverCandidates(eq(user.getId()), eq(TODAY), anyCollection()))
+				.thenReturn(List.of());
+		when(reviewPointRepository.findDueCandidates(eq(user.getId()), eq(TODAY), any()))
+				.thenReturn(duePoints);
+		when(reviewTaskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		TodayPlanResponse response = todayPlanService.generateToday(user);
+
+		assertThat(response.capacityMinutes()).isEqualTo(120);
+		assertThat(response.scheduledMinutes()).isEqualTo(120);
+		assertThat(response.remainingMinutes()).isZero();
+		assertThat(response.groups().get(1).tasks()).hasSize(12);
 	}
 
 	@Test

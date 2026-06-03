@@ -22,6 +22,7 @@ import com.javareview.auth.User;
 import com.javareview.common.ResourceNotFoundException;
 import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointRepository;
+import com.javareview.settings.SettingsService;
 import com.javareview.today.TodayDtos.CreateManualTaskRequest;
 import com.javareview.today.TodayDtos.ReviewTaskResponse;
 import com.javareview.today.TodayDtos.SummaryMetricResponse;
@@ -32,7 +33,6 @@ import com.javareview.today.TodayDtos.TodaySummaryResponse;
 @Service
 public class TodayPlanService {
 
-	private static final int DAILY_CAPACITY_MINUTES = 60;
 	private static final int DEFAULT_TASK_MINUTES = 10;
 	private static final BigDecimal MANUAL_PRIORITY = BigDecimal.valueOf(30).setScale(2);
 	private static final List<ReviewTaskStatus> UNFINISHED_STATUSES = List.of(
@@ -42,29 +42,32 @@ public class TodayPlanService {
 	private final ReviewTaskRepository reviewTaskRepository;
 	private final ReviewPointRepository reviewPointRepository;
 	private final ReviewPriorityService reviewPriorityService;
+	private final SettingsService settingsService;
 	private final Clock clock;
 
 	public TodayPlanService(
 			ReviewTaskRepository reviewTaskRepository,
 			ReviewPointRepository reviewPointRepository,
 			ReviewPriorityService reviewPriorityService,
+			SettingsService settingsService,
 			Clock clock) {
 		this.reviewTaskRepository = reviewTaskRepository;
 		this.reviewPointRepository = reviewPointRepository;
 		this.reviewPriorityService = reviewPriorityService;
+		this.settingsService = settingsService;
 		this.clock = clock;
 	}
 
 	@Transactional(readOnly = true)
 	public TodayPlanResponse getToday(User user) {
-		return toPlanResponse(reviewTaskRepository.findPlan(user.getId(), today()));
+		return toPlanResponse(reviewTaskRepository.findPlan(user.getId(), today()), dailyCapacityMinutes(user));
 	}
 
 	@Transactional
 	public TodayPlanResponse generateToday(User user) {
 		LocalDate today = today();
 		List<ReviewTask> tasks = new ArrayList<>(reviewTaskRepository.findPlan(user.getId(), today));
-		return fillPlan(user, today, tasks);
+		return fillPlan(user, today, tasks, dailyCapacityMinutes(user));
 	}
 
 	@Transactional
@@ -72,14 +75,14 @@ public class TodayPlanService {
 		LocalDate today = today();
 		reviewTaskRepository.deletePendingGeneratedTasks(user.getId(), today);
 		List<ReviewTask> tasks = new ArrayList<>(reviewTaskRepository.findPlan(user.getId(), today));
-		return fillPlan(user, today, tasks);
+		return fillPlan(user, today, tasks, dailyCapacityMinutes(user));
 	}
 
-	private TodayPlanResponse fillPlan(User user, LocalDate today, List<ReviewTask> tasks) {
+	private TodayPlanResponse fillPlan(User user, LocalDate today, List<ReviewTask> tasks, int capacityMinutes) {
 		List<ReviewTask> newTasks = new ArrayList<>();
 		Set<UUID> plannedReviewPointIds = reviewPointIds(tasks);
 		Set<String> plannedManualPrompts = manualPrompts(tasks);
-		int remainingMinutes = remainingCapacity(tasks);
+		int remainingMinutes = remainingCapacity(tasks, capacityMinutes);
 
 		if (remainingMinutes > 0) {
 			remainingMinutes = addCarryOverTasks(
@@ -100,7 +103,7 @@ public class TodayPlanService {
 		if (!newTasks.isEmpty()) {
 			tasks.addAll(reviewTaskRepository.saveAll(newTasks));
 		}
-		return toPlanResponse(tasks);
+		return toPlanResponse(tasks, capacityMinutes);
 	}
 
 	@Transactional
@@ -240,7 +243,7 @@ public class TodayPlanService {
 		}
 	}
 
-	private TodayPlanResponse toPlanResponse(List<ReviewTask> tasks) {
+	private TodayPlanResponse toPlanResponse(List<ReviewTask> tasks, int capacityMinutes) {
 		List<ReviewTask> orderedTasks = tasks.stream()
 				.sorted(Comparator
 						.comparing(ReviewTask::getPriorityScore).reversed()
@@ -258,10 +261,10 @@ public class TodayPlanService {
 
 		return new TodayPlanResponse(
 				today(),
-				DAILY_CAPACITY_MINUTES,
+				capacityMinutes,
 				scheduledMinutes,
 				completedMinutes,
-				Math.max(0, DAILY_CAPACITY_MINUTES - scheduledMinutes),
+				Math.max(0, capacityMinutes - scheduledMinutes),
 				new TodaySummaryResponse(
 						summary.get(ReviewTaskType.CARRY_OVER),
 						summary.get(ReviewTaskType.DUE),
@@ -353,6 +356,10 @@ public class TodayPlanService {
 		return today.atTime(LocalTime.MAX).atZone(clock.getZone()).toInstant();
 	}
 
+	private int dailyCapacityMinutes(User user) {
+		return settingsService.findOrDefault(user).getDailyReviewMinutes();
+	}
+
 	private static Set<UUID> reviewPointIds(List<ReviewTask> tasks) {
 		Set<UUID> ids = new HashSet<>();
 		for (ReviewTask task : tasks) {
@@ -373,12 +380,12 @@ public class TodayPlanService {
 		return prompts;
 	}
 
-	private static int remainingCapacity(List<ReviewTask> tasks) {
+	private static int remainingCapacity(List<ReviewTask> tasks, int capacityMinutes) {
 		int usedMinutes = tasks.stream()
 				.filter(task -> task.getStatus() != ReviewTaskStatus.SKIPPED)
 				.mapToInt(ReviewTask::getEstimatedMinutes)
 				.sum();
-		return Math.max(0, DAILY_CAPACITY_MINUTES - usedMinutes);
+		return Math.max(0, capacityMinutes - usedMinutes);
 	}
 
 	private static String trimRequired(String value, String field) {
