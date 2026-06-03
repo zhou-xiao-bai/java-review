@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -27,6 +28,7 @@ import com.javareview.topic.TopicDtos.TopicSummaryResponse;
 import com.javareview.topic.TopicDtos.TopicTotalsResponse;
 import com.javareview.topic.TopicDtos.TopicsResponse;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionRequest;
+import com.javareview.topic.TopicDtos.UpdateTopicSelectionsRequest;
 
 @Service
 public class TopicService {
@@ -38,6 +40,97 @@ public class TopicService {
 			new PointTemplate("%s 生产故障排查", 5, 4, 4),
 			new PointTemplate("%s 对比取舍与反例", 4, 4, 4),
 			new PointTemplate("%s 两分钟表达结构", 3, 3, 5));
+	private static final Map<String, List<PointTemplate>> BUILTIN_DOMAIN_TEMPLATES = Map.ofEntries(
+			Map.entry("java-foundation", List.of(
+					new PointTemplate("%s API 语义与常见误用", 4, 3, 5),
+					new PointTemplate("%s 源码结构与复杂度", 4, 4, 4),
+					new PointTemplate("%s 与语言特性的边界", 4, 4, 4),
+					new PointTemplate("%s 线上排查与代码审查点", 4, 4, 4),
+					new PointTemplate("%s 面试表达闭环", 3, 3, 5))),
+			Map.entry("jvm", List.of(
+					new PointTemplate("%s 运行时机制", 5, 4, 5),
+					new PointTemplate("%s 参数与工具观测", 5, 5, 5),
+					new PointTemplate("%s 性能退化与故障边界", 5, 5, 5),
+					new PointTemplate("%s 与应用代码的关联", 4, 4, 4),
+					new PointTemplate("%s 生产排查路径", 5, 5, 5))),
+			Map.entry("concurrency", List.of(
+					new PointTemplate("%s 内存可见性与有序性", 5, 5, 5),
+					new PointTemplate("%s 阻塞、唤醒与中断边界", 5, 5, 5),
+					new PointTemplate("%s 线程安全失效场景", 5, 4, 5),
+					new PointTemplate("%s 性能取舍与压测指标", 4, 5, 4),
+					new PointTemplate("%s 生产排查路径", 5, 5, 5))),
+			Map.entry("spring", List.of(
+					new PointTemplate("%s 容器机制与源码入口", 5, 4, 5),
+					new PointTemplate("%s 代理与生命周期边界", 5, 4, 5),
+					new PointTemplate("%s 配置生效与失效场景", 4, 4, 4),
+					new PointTemplate("%s 生产问题排查", 5, 4, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("spring-mvc", List.of(
+					new PointTemplate("%s 请求链路与扩展点", 5, 4, 5),
+					new PointTemplate("%s 参数、响应与异常边界", 4, 4, 5),
+					new PointTemplate("%s 与 Servlet/Spring 组件关系", 4, 4, 4),
+					new PointTemplate("%s 线上问题排查", 5, 4, 4),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("spring-boot", List.of(
+					new PointTemplate("%s 自动装配与条件判断", 5, 4, 5),
+					new PointTemplate("%s 配置加载与覆盖顺序", 5, 4, 5),
+					new PointTemplate("%s 启动链路与诊断入口", 4, 4, 4),
+					new PointTemplate("%s 生产治理与可观测性", 4, 4, 4),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("mybatis", List.of(
+					new PointTemplate("%s 执行链路与核心对象", 5, 4, 5),
+					new PointTemplate("%s SQL 映射与缓存边界", 5, 4, 5),
+					new PointTemplate("%s 插件扩展与失效场景", 4, 4, 4),
+					new PointTemplate("%s 线上慢 SQL 排查", 5, 4, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("mysql", List.of(
+					new PointTemplate("%s InnoDB 核心机制", 5, 4, 5),
+					new PointTemplate("%s 索引、锁与事务边界", 5, 5, 5),
+					new PointTemplate("%s 执行计划与性能诊断", 5, 5, 5),
+					new PointTemplate("%s 生产故障排查", 5, 5, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("redis", List.of(
+					new PointTemplate("%s 数据结构与命令语义", 5, 4, 5),
+					new PointTemplate("%s 内存、过期与持久化边界", 5, 4, 5),
+					new PointTemplate("%s 高可用与集群行为", 5, 5, 5),
+					new PointTemplate("%s 生产问题排查", 5, 5, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("rocketmq", List.of(
+					new PointTemplate("%s Broker/NameServer 链路", 5, 4, 5),
+					new PointTemplate("%s 可靠性、顺序与重试边界", 5, 4, 5),
+					new PointTemplate("%s 消费进度与幂等治理", 5, 4, 5),
+					new PointTemplate("%s 线上问题排查", 5, 5, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("dubbo", List.of(
+					new PointTemplate("%s 调用链与扩展点", 5, 4, 5),
+					new PointTemplate("%s 注册、路由与集群容错", 5, 4, 5),
+					new PointTemplate("%s 超时、重试与幂等边界", 5, 4, 5),
+					new PointTemplate("%s 线上问题排查", 5, 4, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("netty", List.of(
+					new PointTemplate("%s 事件循环与线程模型", 5, 4, 5),
+					new PointTemplate("%s 内存、编解码与背压边界", 5, 5, 5),
+					new PointTemplate("%s Channel 生命周期与异常传播", 5, 4, 5),
+					new PointTemplate("%s 线上问题排查", 5, 5, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("kafka", List.of(
+					new PointTemplate("%s 生产消费链路", 5, 4, 5),
+					new PointTemplate("%s 分区、副本与一致性边界", 5, 5, 5),
+					new PointTemplate("%s 位移、事务与幂等语义", 5, 5, 5),
+					new PointTemplate("%s 性能调优与故障排查", 5, 5, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("distributed-systems", List.of(
+					new PointTemplate("%s 一致性与可用性边界", 5, 5, 5),
+					new PointTemplate("%s 幂等、重试与补偿机制", 5, 4, 5),
+					new PointTemplate("%s 容量、降级与隔离策略", 5, 4, 5),
+					new PointTemplate("%s 线上问题排查", 5, 5, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))),
+			Map.entry("computer-basics", List.of(
+					new PointTemplate("%s 核心协议与系统调用链路", 5, 4, 5),
+					new PointTemplate("%s 性能指标与观测手段", 4, 4, 4),
+					new PointTemplate("%s 失效边界与异常场景", 5, 4, 5),
+					new PointTemplate("%s 生产排查路径", 5, 5, 5),
+					new PointTemplate("%s 面试表达闭环", 4, 3, 5))));
 	private static final Map<String, List<PointTemplate>> BUILTIN_TEMPLATES = Map.ofEntries(
 			Map.entry("spring-transactions", List.of(
 					new PointTemplate("事务代理生效边界", 5, 4, 5),
@@ -161,6 +254,28 @@ public class TopicService {
 	}
 
 	@Transactional
+	public TopicsResponse updateSelections(UpdateTopicSelectionsRequest request) {
+		List<UUID> topicIds = request.topicIds()
+				.stream()
+				.collect(Collectors.collectingAndThen(
+						Collectors.toCollection(LinkedHashSet::new),
+						ArrayList::new));
+		List<Topic> topics = topicRepository.findAllById(topicIds);
+		if (topics.size() != topicIds.size()) {
+			throw new ResourceNotFoundException("Topic not found.");
+		}
+
+		boolean selected = Boolean.TRUE.equals(request.selected());
+		for (Topic topic : topics) {
+			topic.setSelected(selected);
+			if (selected) {
+				initializePoints(topic);
+			}
+		}
+		return listTopics(null);
+	}
+
+	@Transactional
 	public TopicSummaryResponse initializePoints(UUID topicId) {
 		Topic topic = requireTopic(topicId);
 		initializePoints(topic);
@@ -173,13 +288,23 @@ public class TopicService {
 	}
 
 	private void initializePoints(Topic topic) {
-		if (reviewPointRepository.existsByTopicId(topic.getId())) {
+		List<ReviewPoint> existingPoints = reviewPointRepository.findByTopicId(topic.getId());
+		List<PointTemplate> templates = BUILTIN_TEMPLATES.get(topic.getCode());
+		if (templates == null && !existingPoints.isEmpty()) {
 			return;
 		}
-		List<PointTemplate> templates = BUILTIN_TEMPLATES.getOrDefault(topic.getCode(), DEFAULT_TEMPLATES);
-		reviewPointRepository.saveAll(templates.stream()
+		if (templates == null) {
+			templates = BUILTIN_DOMAIN_TEMPLATES.getOrDefault(topic.getDomain().getCode(), DEFAULT_TEMPLATES);
+		}
+		List<ReviewPoint> missingPoints = templates.stream()
+				.filter(template -> existingPoints.stream()
+						.noneMatch(point -> point.getTitle().equals(template.resolvedTitle(topic))))
 				.map(template -> template.toReviewPoint(topic))
-				.toList());
+				.toList();
+		if (missingPoints.isEmpty()) {
+			return;
+		}
+		reviewPointRepository.saveAll(missingPoints);
 	}
 
 	private Map<UUID, List<ReviewPoint>> loadPointsByTopic(Collection<UUID> topicIds) {
@@ -288,7 +413,7 @@ public class TopicService {
 	private record PointTemplate(String title, int importance, int difficulty, int interviewFrequency) {
 
 		ReviewPoint toReviewPoint(Topic topic) {
-			String resolvedTitle = title.contains("%s") ? title.formatted(topic.getTitle()) : title;
+			String resolvedTitle = resolvedTitle(topic);
 			return new ReviewPoint(
 					topic,
 					resolvedTitle,
@@ -296,6 +421,10 @@ public class TopicService {
 					difficulty,
 					interviewFrequency,
 					"围绕「" + resolvedTitle + "」追问机制、边界和生产排查。");
+		}
+
+		String resolvedTitle(Topic topic) {
+			return title.contains("%s") ? title.formatted(topic.getTitle()) : title;
 		}
 	}
 }

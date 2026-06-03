@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -54,4 +55,16 @@ public interface ReviewTaskRepository extends JpaRepository<ReviewTask, UUID> {
 			@Param("userId") UUID userId,
 			@Param("today") LocalDate today,
 			@Param("statuses") Collection<ReviewTaskStatus> statuses);
+
+	@Modifying(flushAutomatically = true, clearAutomatically = true)
+	@Query("""
+			delete from ReviewTask task
+			where task.user.id = :userId
+			and task.taskDate = :taskDate
+			and task.status = com.javareview.today.ReviewTaskStatus.PENDING
+			and task.type <> com.javareview.today.ReviewTaskType.MANUAL
+			""")
+	int deletePendingGeneratedTasks(
+			@Param("userId") UUID userId,
+			@Param("taskDate") LocalDate taskDate);
 }

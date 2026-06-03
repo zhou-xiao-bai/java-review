@@ -64,6 +64,18 @@ public class TodayPlanService {
 	public TodayPlanResponse generateToday(User user) {
 		LocalDate today = today();
 		List<ReviewTask> tasks = new ArrayList<>(reviewTaskRepository.findPlan(user.getId(), today));
+		return fillPlan(user, today, tasks);
+	}
+
+	@Transactional
+	public TodayPlanResponse regenerateToday(User user) {
+		LocalDate today = today();
+		reviewTaskRepository.deletePendingGeneratedTasks(user.getId(), today);
+		List<ReviewTask> tasks = new ArrayList<>(reviewTaskRepository.findPlan(user.getId(), today));
+		return fillPlan(user, today, tasks);
+	}
+
+	private TodayPlanResponse fillPlan(User user, LocalDate today, List<ReviewTask> tasks) {
 		List<ReviewTask> newTasks = new ArrayList<>();
 		Set<UUID> plannedReviewPointIds = reviewPointIds(tasks);
 		Set<String> plannedManualPrompts = manualPrompts(tasks);

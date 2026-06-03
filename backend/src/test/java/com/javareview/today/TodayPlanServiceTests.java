@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -122,6 +123,25 @@ class TodayPlanServiceTests {
 
 		assertThat(response.scheduledMinutes()).isEqualTo(60);
 		assertThat(response.groups().get(1).tasks()).hasSize(6);
+	}
+
+	@Test
+	void regeneratingPlanClearsPendingGeneratedTasksBeforeFillingPlan() {
+		ReviewPoint duePoint = duePoint("传播行为与嵌套调用", 5, 4, 5, TODAY.minusDays(1));
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.findCarryOverCandidates(eq(user.getId()), eq(TODAY), anyCollection()))
+				.thenReturn(List.of());
+		when(reviewPointRepository.findDueCandidates(eq(user.getId()), eq(TODAY), any()))
+				.thenReturn(List.of(duePoint));
+		when(reviewPointRepository.findNewExpansionCandidates(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		TodayPlanResponse response = todayPlanService.regenerateToday(user);
+
+		verify(reviewTaskRepository).deletePendingGeneratedTasks(user.getId(), TODAY);
+		assertThat(response.groups().get(1).tasks())
+				.extracting(task -> task.pointTitle())
+				.containsExactly("传播行为与嵌套调用");
 	}
 
 	private ReviewPoint point(String title, int importance, int difficulty, int frequency) {

@@ -6,7 +6,9 @@ import java.util.List;
 import java.util.UUID;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.Size;
 
 public final class TopicDtos {
@@ -58,6 +60,14 @@ public final class TopicDtos {
 	}
 
 	public record UpdateTopicSelectionRequest(
+			@NotNull
+			Boolean selected) {
+	}
+
+	public record UpdateTopicSelectionsRequest(
+			@NotEmpty
+			@Size(max = 500)
+			List<UUID> topicIds,
 			@NotNull
 			Boolean selected) {
 	}

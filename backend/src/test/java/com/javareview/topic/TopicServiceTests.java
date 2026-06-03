@@ -21,7 +21,9 @@ import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointRepository;
 import com.javareview.topic.TopicDtos.CreateTopicRequest;
 import com.javareview.topic.TopicDtos.TopicSummaryResponse;
+import com.javareview.topic.TopicDtos.TopicsResponse;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionRequest;
+import com.javareview.topic.TopicDtos.UpdateTopicSelectionsRequest;
 
 @ExtendWith(MockitoExtension.class)
 class TopicServiceTests {
@@ -48,7 +50,6 @@ class TopicServiceTests {
 		Topic topic = new Topic(domain, "spring-transactions", "Spring 事务", TopicSource.BUILTIN, false);
 		List<ReviewPoint> savedPoints = new ArrayList<>();
 		when(topicRepository.findById(topic.getId())).thenReturn(Optional.of(topic));
-		when(reviewPointRepository.existsByTopicId(topic.getId())).thenReturn(false);
 		when(reviewPointRepository.saveAll(any())).thenAnswer(invocation -> {
 			Iterable<ReviewPoint> points = invocation.getArgument(0);
 			points.forEach(savedPoints::add);
@@ -98,7 +99,6 @@ class TopicServiceTests {
 		when(domainRepository.findById(domain.getId())).thenReturn(Optional.of(domain));
 		when(topicRepository.existsByDomainIdAndTitleIgnoreCase(domain.getId(), "SQL 调优")).thenReturn(false);
 		when(topicRepository.save(any(Topic.class))).thenAnswer(invocation -> invocation.getArgument(0));
-		when(reviewPointRepository.existsByTopicId(any())).thenReturn(false);
 		when(reviewPointRepository.saveAll(any())).thenAnswer(invocation -> {
 			Iterable<ReviewPoint> points = invocation.getArgument(0);
 			points.forEach(savedPoints::add);
@@ -112,5 +112,65 @@ class TopicServiceTests {
 		assertThat(response.source()).isEqualTo("MANUAL");
 		assertThat(response.selected()).isTrue();
 		assertThat(response.reviewPointCount()).isEqualTo(5);
+	}
+
+	@Test
+	void initializingTopicAddsOnlyMissingBuiltInReviewPoints() {
+		Domain domain = new Domain(UUID.randomUUID(), "spring", "Spring", 40);
+		Topic topic = new Topic(domain, "spring-transactions", "Spring 事务", TopicSource.BUILTIN, false);
+		List<ReviewPoint> savedPoints = new ArrayList<>(List.of(new ReviewPoint(
+				topic,
+				"事务代理生效边界",
+				5,
+				4,
+				5,
+				"next probe")));
+		when(topicRepository.findById(topic.getId())).thenReturn(Optional.of(topic));
+		when(reviewPointRepository.findByTopicId(topic.getId())).thenReturn(savedPoints);
+		when(reviewPointRepository.saveAll(any())).thenAnswer(invocation -> {
+			Iterable<ReviewPoint> points = invocation.getArgument(0);
+			points.forEach(savedPoints::add);
+			return savedPoints;
+		});
+
+		TopicSummaryResponse response = topicService.initializePoints(topic.getId());
+
+		assertThat(response.reviewPointCount()).isEqualTo(6);
+		assertThat(savedPoints)
+				.extracting(ReviewPoint::getTitle)
+				.containsOnlyOnce("事务代理生效边界")
+				.contains("传播行为与嵌套调用", "生产事务失效排查");
+	}
+
+	@Test
+	void bulkSelectingTopicsInitializesSelectedTopics() {
+		Domain domain = new Domain(UUID.randomUUID(), "redis", "Redis", 90);
+		Topic cacheTopic = new Topic(domain, "redis-cache-consistency", "缓存一致性", TopicSource.BUILTIN, false);
+		Topic streamTopic = new Topic(domain, "redis-streams", "Stream", TopicSource.BUILTIN, false);
+		List<ReviewPoint> savedPoints = new ArrayList<>();
+		when(topicRepository.findAllById(List.of(cacheTopic.getId(), streamTopic.getId())))
+				.thenReturn(List.of(cacheTopic, streamTopic));
+		when(reviewPointRepository.findByTopicId(cacheTopic.getId())).thenReturn(List.of());
+		when(reviewPointRepository.findByTopicId(streamTopic.getId())).thenReturn(List.of());
+		when(domainRepository.findAllByOrderBySortOrderAscNameAsc()).thenReturn(List.of(domain));
+		when(topicRepository.findAllWithDomain()).thenReturn(List.of(cacheTopic, streamTopic));
+		when(reviewPointRepository.saveAll(any())).thenAnswer(invocation -> {
+			Iterable<ReviewPoint> points = invocation.getArgument(0);
+			points.forEach(savedPoints::add);
+			return savedPoints;
+		});
+		when(reviewPointRepository.findByTopicIdIn(List.of(cacheTopic.getId(), streamTopic.getId())))
+				.thenReturn(savedPoints);
+
+		TopicsResponse response = topicService.updateSelections(new UpdateTopicSelectionsRequest(
+				List.of(cacheTopic.getId(), streamTopic.getId()),
+				true));
+
+		assertThat(cacheTopic.isSelected()).isTrue();
+		assertThat(streamTopic.isSelected()).isTrue();
+		assertThat(response.totals().selectedTopicCount()).isEqualTo(2);
+		assertThat(savedPoints)
+				.extracting(ReviewPoint::getTitle)
+				.contains("缓存更新策略选择", "Stream 生产问题排查");
 	}
 }

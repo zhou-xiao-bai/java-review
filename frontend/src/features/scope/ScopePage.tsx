@@ -17,6 +17,7 @@ import {
   initializeTopicPoints,
   type TopicSummary,
   updateTopicSelection,
+  updateTopicSelections,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -41,6 +42,24 @@ export function ScopePage() {
     activeDomainId === 'all'
       ? domains
       : domains.filter((domain) => domain.id === activeDomainId)
+  const visibleTopicIds = useMemo(
+    () => visibleDomains.flatMap((domain) => domain.topics.map((topic) => topic.id)),
+    [visibleDomains],
+  )
+  const visibleSelectedTopicIds = useMemo(
+    () =>
+      visibleDomains.flatMap((domain) =>
+        domain.topics.filter((topic) => topic.selected).map((topic) => topic.id),
+      ),
+    [visibleDomains],
+  )
+  const visibleUnselectedTopicIds = useMemo(
+    () =>
+      visibleDomains.flatMap((domain) =>
+        domain.topics.filter((topic) => !topic.selected).map((topic) => topic.id),
+      ),
+    [visibleDomains],
+  )
   const allTopics = useMemo(
     () => domains.flatMap((domain) => domain.topics),
     [domains],
@@ -66,6 +85,19 @@ export function ScopePage() {
     },
   })
 
+  const bulkSelectionMutation = useMutation({
+    mutationFn: ({
+      topicIds,
+      selected,
+    }: {
+      topicIds: string[]
+      selected: boolean
+    }) => updateTopicSelections(topicIds, selected),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: topicsQueryKey })
+    },
+  })
+
   const initializeMutation = useMutation({
     mutationFn: initializeTopicPoints,
     onSuccess: async (topic) => {
@@ -87,6 +119,7 @@ export function ScopePage() {
 
   const errorMessage =
     getApiErrorMessage(selectionMutation.error, '') ||
+    getApiErrorMessage(bulkSelectionMutation.error, '') ||
     getApiErrorMessage(initializeMutation.error, '') ||
     getApiErrorMessage(createMutation.error, '') ||
     (topicsQuery.isError ? getApiErrorMessage(topicsQuery.error) : '')
@@ -102,6 +135,17 @@ export function ScopePage() {
     })
   }
 
+  function handleBulkSelection(topicIds: string[], selected: boolean) {
+    const uniqueTopicIds = [...new Set(topicIds)]
+    if (uniqueTopicIds.length === 0) {
+      return
+    }
+    bulkSelectionMutation.mutate({ topicIds: uniqueTopicIds, selected })
+  }
+
+  const selectionPending =
+    selectionMutation.isPending || bulkSelectionMutation.isPending
+
   return (
     <section className="space-y-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -114,7 +158,7 @@ export function ScopePage() {
         <div className="grid gap-3 sm:grid-cols-3">
           <Metric label="已选主题" value={topicsQuery.data?.totals.selectedTopicCount ?? 0} />
           <Metric label="主题总数" value={topicsQuery.data?.totals.topicCount ?? 0} />
-          <Metric label="内部点" value={topicsQuery.data?.totals.reviewPointCount ?? 0} />
+          <Metric label="复习点" value={topicsQuery.data?.totals.reviewPointCount ?? 0} />
         </div>
       </div>
 
@@ -197,6 +241,24 @@ export function ScopePage() {
                 />
               ))}
             </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <BulkActionButton
+                disabled={selectionPending || visibleUnselectedTopicIds.length === 0}
+                loading={bulkSelectionMutation.isPending}
+                label="全选可见"
+                onClick={() => handleBulkSelection(visibleUnselectedTopicIds, true)}
+              />
+              <BulkActionButton
+                disabled={selectionPending || visibleSelectedTopicIds.length === 0}
+                loading={bulkSelectionMutation.isPending}
+                label="清空可见"
+                onClick={() => handleBulkSelection(visibleSelectedTopicIds, false)}
+              />
+              <span className="text-xs text-slate-500">
+                当前可见 {visibleTopicIds.length} 个主题
+              </span>
+            </div>
           </div>
 
           {topicsQuery.isLoading ? (
@@ -222,12 +284,46 @@ export function ScopePage() {
                       {domain.selectedCount}/{domain.topicCount} 已选
                     </div>
                   </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <BulkActionButton
+                      disabled={
+                        selectionPending ||
+                        domain.topics.every((topic) => topic.selected)
+                      }
+                      loading={bulkSelectionMutation.isPending}
+                      label="全选"
+                      onClick={() =>
+                        handleBulkSelection(
+                          domain.topics
+                            .filter((topic) => !topic.selected)
+                            .map((topic) => topic.id),
+                          true,
+                        )
+                      }
+                    />
+                    <BulkActionButton
+                      disabled={
+                        selectionPending ||
+                        domain.topics.every((topic) => !topic.selected)
+                      }
+                      loading={bulkSelectionMutation.isPending}
+                      label="清空"
+                      onClick={() =>
+                        handleBulkSelection(
+                          domain.topics
+                            .filter((topic) => topic.selected)
+                            .map((topic) => topic.id),
+                          false,
+                        )
+                      }
+                    />
+                  </div>
                 </div>
                 <div className="divide-y divide-slate-100">
                   {domain.topics.map((topic) => (
                     <TopicRow
                       key={topic.id}
-                      disabled={selectionMutation.isPending}
+                      disabled={selectionPending}
                       selected={selectedTopic?.id === topic.id}
                       topic={topic}
                       onPick={() => setSelectedTopicId(topic.id)}
@@ -244,7 +340,7 @@ export function ScopePage() {
 
         <TopicDetailPanel
           initializePending={initializeMutation.isPending}
-          selectionPending={selectionMutation.isPending}
+          selectionPending={selectionPending}
           topic={selectedTopic}
           onInitialize={(topic) => initializeMutation.mutate(topic.id)}
           onToggle={(topic, selected) =>
@@ -296,6 +392,32 @@ function DomainFilterButton({
       >
         {count}
       </span>
+    </button>
+  )
+}
+
+function BulkActionButton({
+  disabled,
+  label,
+  loading,
+  onClick,
+}: {
+  disabled: boolean
+  label: string
+  loading: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {loading ? (
+        <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+      ) : null}
+      {label}
     </button>
   )
 }
@@ -360,7 +482,7 @@ function TopicRow({
       </div>
 
       <div className="flex items-center text-sm text-slate-600 md:justify-end">
-        内部点 {topic.coveredReviewPointCount}/{topic.reviewPointCount}
+        复习点 {topic.coveredReviewPointCount}/{topic.reviewPointCount}
       </div>
       <div className="flex items-center text-sm font-medium text-slate-900 md:justify-end">
         {formatMastery(topic.averageMastery)}
@@ -443,7 +565,7 @@ function TopicDetailPanel({
         </button>
 
         <button
-          disabled={initializePending || topic.reviewPointCount > 0}
+          disabled={initializePending}
           type="button"
           onClick={() => onInitialize(topic)}
           className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
@@ -453,8 +575,11 @@ function TopicDetailPanel({
           ) : (
             <RefreshCw className="size-4" aria-hidden="true" />
           )}
-          初始化内部点
+          补齐复习点
         </button>
+        <div className="text-xs leading-5 text-slate-500">
+          加入范围会自动准备复习点；此按钮用于补齐旧主题缺失的点。
+        </div>
       </div>
 
       <div className="mt-5 border-t border-slate-200 pt-5">

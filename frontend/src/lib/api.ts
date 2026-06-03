@@ -197,6 +197,13 @@ export function updateTopicSelection(id: string, selected: boolean) {
   })
 }
 
+export function updateTopicSelections(topicIds: string[], selected: boolean) {
+  return apiRequest<TopicsResponse>('/api/topics/selection', {
+    method: 'PATCH',
+    body: { topicIds, selected },
+  })
+}
+
 export function initializeTopicPoints(id: string) {
   return apiRequest<TopicSummary>(`/api/topics/${id}/initialize-points`, {
     method: 'POST',
@@ -265,6 +272,12 @@ export function getToday() {
 
 export function generateToday() {
   return apiRequest<TodayPlan>('/api/today/generate', {
+    method: 'POST',
+  })
+}
+
+export function regenerateToday() {
+  return apiRequest<TodayPlan>('/api/today/regenerate', {
     method: 'POST',
   })
 }

@@ -18,6 +18,7 @@ import {
   generateToday,
   getApiErrorMessage,
   getToday,
+  regenerateToday,
   skipReviewTask,
   type ReviewTask,
   type ReviewTaskGroup,
@@ -43,6 +44,13 @@ export function TodayPage() {
 
   const generateMutation = useMutation({
     mutationFn: generateToday,
+    onSuccess: (plan) => {
+      queryClient.setQueryData(todayQueryKey, plan)
+    },
+  })
+
+  const regenerateMutation = useMutation({
+    mutationFn: regenerateToday,
     onSuccess: (plan) => {
       queryClient.setQueryData(todayQueryKey, plan)
     },
@@ -83,6 +91,7 @@ export function TodayPage() {
   )
   const errorMessage =
     getApiErrorMessage(generateMutation.error, '') ||
+    getApiErrorMessage(regenerateMutation.error, '') ||
     getApiErrorMessage(manualMutation.error, '') ||
     getApiErrorMessage(skipMutation.error, '') ||
     (todayQuery.isError ? getApiErrorMessage(todayQuery.error) : '')
@@ -117,7 +126,7 @@ export function TodayPage() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={generateMutation.isPending}
+            disabled={generateMutation.isPending || regenerateMutation.isPending}
             onClick={() => generateMutation.mutate()}
             className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -126,7 +135,20 @@ export function TodayPage() {
             ) : (
               <RefreshCw className="size-4" aria-hidden="true" />
             )}
-            生成今日计划
+            补齐今日计划
+          </button>
+          <button
+            type="button"
+            disabled={generateMutation.isPending || regenerateMutation.isPending}
+            onClick={() => regenerateMutation.mutate()}
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {regenerateMutation.isPending ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <RefreshCw className="size-4" aria-hidden="true" />
+            )}
+            重排待开始任务
           </button>
           <button
             type="button"

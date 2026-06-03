@@ -44,6 +44,12 @@ public class TodayController {
 		return todayPlanService.generateToday(currentUser(principal));
 	}
 
+	@PostMapping("/today/regenerate")
+	public TodayPlanResponse regenerateToday(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal) {
+		return todayPlanService.regenerateToday(currentUser(principal));
+	}
+
 	@PostMapping("/today/manual-tasks")
 	public ReviewTaskResponse createManualTask(
 			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,

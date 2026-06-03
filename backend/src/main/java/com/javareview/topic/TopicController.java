@@ -19,6 +19,7 @@ import com.javareview.topic.TopicDtos.CreateTopicRequest;
 import com.javareview.topic.TopicDtos.TopicSummaryResponse;
 import com.javareview.topic.TopicDtos.TopicsResponse;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionRequest;
+import com.javareview.topic.TopicDtos.UpdateTopicSelectionsRequest;
 
 @RestController
 @RequestMapping("/api/topics")
@@ -46,6 +47,11 @@ public class TopicController {
 			@PathVariable UUID id,
 			@Valid @RequestBody UpdateTopicSelectionRequest request) {
 		return topicService.updateSelection(id, request);
+	}
+
+	@PatchMapping("/selection")
+	public TopicsResponse updateSelections(@Valid @RequestBody UpdateTopicSelectionsRequest request) {
+		return topicService.updateSelections(request);
 	}
 
 	@PostMapping("/{id}/initialize-points")
