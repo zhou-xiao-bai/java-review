@@ -21,6 +21,7 @@ const todayQueryKey = ['today'] as const
 export function ReviewSessionPage() {
   const queryClient = useQueryClient()
   const [session, setSession] = useState<ReviewSession | null>(null)
+  const [pendingTask, setPendingTask] = useState<ReviewTask | null>(null)
   const [answer, setAnswer] = useState('')
   const [clarifyText, setClarifyText] = useState('')
   const todayQuery = useQuery({ queryKey: todayQueryKey, queryFn: getToday })
@@ -35,11 +36,13 @@ export function ReviewSessionPage() {
     onSuccess: (plan) => queryClient.setQueryData(todayQueryKey, plan),
   })
   const startMutation = useMutation({
-    mutationFn: startReviewSession,
+    mutationFn: (task: ReviewTask) => startReviewSession(task.id),
     onSuccess: async (nextSession) => {
       setSession(nextSession)
+      setPendingTask(null)
       await queryClient.invalidateQueries({ queryKey: todayQueryKey })
     },
+    onError: () => setPendingTask(null),
   })
   const answerMutation = useMutation({
     mutationFn: ({ id, value }: { id: string; value: string }) => answerReviewSession(id, value),
@@ -82,7 +85,13 @@ export function ReviewSessionPage() {
 
   function startNextTask() {
     const next = activeTasks.find((task) => task.id !== session?.taskId) ?? activeTasks[0]
-    if (next) startMutation.mutate(next.id)
+    if (next) startTask(next)
+  }
+
+  function startTask(task: ReviewTask) {
+    setSession(null)
+    setPendingTask(task)
+    startMutation.mutate(task)
   }
 
   return (
@@ -122,10 +131,10 @@ export function ReviewSessionPage() {
               tasks.map((task) => (
                 <TaskButton
                   key={task.id}
-                  active={session?.taskId === task.id}
+                  active={session?.taskId === task.id || pendingTask?.id === task.id}
                   disabled={startMutation.isPending || !['pending', 'in_progress'].includes(task.status)}
                   task={task}
-                  onStart={() => startMutation.mutate(task.id)}
+                  onStart={() => startTask(task)}
                 />
               ))
             )}
@@ -133,7 +142,7 @@ export function ReviewSessionPage() {
         </aside>
 
         <main className="space-y-4">
-          {!session ? (
+          {!session && !pendingTask ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
               请选择一个今日任务开始严格面试复习。
             </div>
@@ -142,12 +151,12 @@ export function ReviewSessionPage() {
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <div className="text-xs font-medium text-slate-500">{session.topicTitle ?? '今日加练'}</div>
+                    <div className="text-xs font-medium text-slate-500">{session?.topicTitle ?? pendingTask?.topicTitle ?? '今日加练'}</div>
                     <h2 className="mt-1 text-xl font-semibold text-slate-950">
-                      {session.pointTitle ?? session.manualPrompt}
+                      {session?.pointTitle ?? session?.manualPrompt ?? pendingTask?.pointTitle ?? pendingTask?.manualPrompt}
                     </h2>
                   </div>
-                  <StatusTag status={session.status} />
+                  <StatusTag status={session?.status ?? 'generating'} />
                 </div>
               </section>
 
@@ -156,16 +165,12 @@ export function ReviewSessionPage() {
                   对话记录
                 </div>
                 <div className="space-y-3 p-5">
-                  {session.turns.map((turn) => (
-                    <div key={turn.id} className={cn('rounded-md px-3 py-2 text-sm', turn.role === 'user' ? 'bg-slate-100 text-slate-900' : 'bg-emerald-50 text-emerald-900')}>
-                      <div className="mb-1 text-xs font-medium opacity-70">{turn.role === 'user' ? '我' : '面试官'} / {turn.turnType}</div>
-                      <div className="whitespace-pre-wrap leading-6">{turn.content}</div>
-                    </div>
-                  ))}
+                  {pendingTask && startMutation.isPending ? <AiThinking /> : null}
+                  {session?.turns.map((turn) => <TurnCard key={turn.id} turn={turn} />)}
                 </div>
               </section>
 
-              {session.status === 'active' ? (
+              {session?.status === 'active' ? (
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                   <form className="space-y-3" onSubmit={submitAnswer}>
                     <textarea
@@ -203,7 +208,7 @@ export function ReviewSessionPage() {
                   </div>
                 </section>
               ) : (
-                <EvaluationPanel session={session} onNext={startNextTask} hasNext={activeTasks.length > 0} />
+                session ? <EvaluationPanel session={session} onNext={startNextTask} hasNext={activeTasks.length > 0} /> : null
               )}
             </>
           )}
@@ -235,8 +240,60 @@ function TaskButton({ active, disabled, task, onStart }: { active: boolean; disa
 }
 
 function StatusTag({ status }: { status: string }) {
-  const label = status === 'evaluated' ? '已收口' : status === 'abandoned' ? '已跳过' : '进行中'
+  const label = status === 'generating' ? '生成中' : status === 'evaluated' ? '已收口' : status === 'abandoned' ? '已跳过' : '进行中'
   return <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{label}</span>
+}
+
+function AiThinking() {
+  return (
+    <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
+      <div className="flex items-center gap-2 text-xs font-semibold text-emerald-700">
+        <span className="h-2 w-2 rounded-full bg-emerald-500" />
+        面试官
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        <div className="flex h-8 items-center gap-1 rounded-full bg-white px-3 shadow-sm shadow-emerald-950/5">
+          {[0, 1, 2].map((index) => (
+            <span
+              key={index}
+              className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-500"
+              style={{ animationDelay: `${index * 120}ms` }}
+            />
+          ))}
+        </div>
+        <span className="text-sm text-emerald-800">正在生成针对当前复习点的题目</span>
+      </div>
+    </div>
+  )
+}
+
+function TurnCard({ turn }: { turn: ReviewSession['turns'][number] }) {
+  const isUser = turn.role === 'user'
+  const isQuestion = turn.turnType === 'question' || turn.turnType === 'follow_up'
+  return (
+    <div className={cn('rounded-lg border px-4 py-3 text-sm shadow-sm', isUser ? 'border-slate-200 bg-slate-50 text-slate-900' : 'border-emerald-100 bg-emerald-50 text-emerald-950')}>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className={cn('text-xs font-semibold', isUser ? 'text-slate-500' : 'text-emerald-700')}>
+          {isUser ? '我' : '面试官'}
+        </div>
+        <div className="rounded bg-white/70 px-2 py-0.5 text-xs text-slate-500">{turnTypeLabel(turn.turnType)}</div>
+      </div>
+      <div className={cn('whitespace-pre-wrap leading-7', isQuestion && !isUser ? 'text-base font-medium' : '')}>{turn.content}</div>
+    </div>
+  )
+}
+
+function turnTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    question: '题目',
+    follow_up: '追问',
+    answer: '回答',
+    unknown: '不会',
+    clarification: '澄清',
+    skip: '跳过',
+    evaluation: '评分',
+  }
+  return labels[type] ?? type
 }
 
 function EvaluationPanel({ session, onNext, hasNext }: { session: ReviewSession; onNext: () => void; hasNext: boolean }) {
