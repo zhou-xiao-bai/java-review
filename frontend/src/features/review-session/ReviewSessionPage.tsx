@@ -1,11 +1,11 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle2, HelpCircle, Loader2, Play, Send, SkipForward } from 'lucide-react'
+import { AlertCircle, ArrowLeft, CheckCircle2, HelpCircle, Loader2, Send, SkipForward } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
 import {
   answerReviewSession,
   clarifyReviewSession,
-  generateToday,
   getApiErrorMessage,
   getToday,
   skipReviewSession,
@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils'
 const todayQueryKey = ['today'] as const
 
 export function ReviewSessionPage() {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [session, setSession] = useState<ReviewSession | null>(null)
   const [pendingTask, setPendingTask] = useState<ReviewTask | null>(null)
@@ -31,10 +32,6 @@ export function ReviewSessionPage() {
   )
   const activeTasks = tasks.filter((task) => ['pending', 'in_progress'].includes(task.status))
 
-  const generateMutation = useMutation({
-    mutationFn: generateToday,
-    onSuccess: (plan) => queryClient.setQueryData(todayQueryKey, plan),
-  })
   const startMutation = useMutation({
     mutationFn: (task: ReviewTask) => startReviewSession(task.id),
     onSuccess: async (nextSession) => {
@@ -69,7 +66,6 @@ export function ReviewSessionPage() {
   })
 
   const errorMessage =
-    getApiErrorMessage(generateMutation.error, '') ||
     getApiErrorMessage(startMutation.error, '') ||
     getApiErrorMessage(answerMutation.error, '') ||
     getApiErrorMessage(unknownMutation.error, '') ||
@@ -102,12 +98,11 @@ export function ReviewSessionPage() {
         </div>
         <button
           className="inline-flex h-10 w-fit items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-          disabled={generateMutation.isPending}
           type="button"
-          onClick={() => generateMutation.mutate()}
+          onClick={() => navigate('/today')}
         >
-          {generateMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-          生成今日队列
+          <ArrowLeft className="size-4" />
+          返回今日计划
         </button>
       </div>
 
@@ -126,7 +121,7 @@ export function ReviewSessionPage() {
           </div>
           <div className="max-h-[620px] divide-y divide-slate-100 overflow-auto">
             {tasks.length === 0 ? (
-              <div className="p-4 text-sm text-slate-500">暂无任务。</div>
+              <div className="p-4 text-sm text-slate-500">暂无今日任务。</div>
             ) : (
               tasks.map((task) => (
                 <TaskButton
@@ -144,7 +139,25 @@ export function ReviewSessionPage() {
         <main className="space-y-4">
           {!session && !pendingTask ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
-              请选择一个今日任务开始严格面试复习。
+              <div>
+                {todayQuery.isLoading
+                  ? '正在加载今日队列...'
+                  : tasks.length === 0
+                    ? '暂无今日任务，请先返回今日计划补齐队列。'
+                    : activeTasks.length === 0
+                      ? '今日任务已完成或跳过。'
+                      : '请选择一个今日任务开始严格面试复习。'}
+              </div>
+              {todayQuery.isLoading ? null : tasks.length === 0 || activeTasks.length === 0 ? (
+                <button
+                  className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800"
+                  type="button"
+                  onClick={() => navigate('/today')}
+                >
+                  <ArrowLeft className="size-4" />
+                  返回今日计划
+                </button>
+              ) : null}
             </div>
           ) : (
             <>

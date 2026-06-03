@@ -295,6 +295,12 @@ export function skipReviewTask(id: string) {
   })
 }
 
+export function unskipReviewTask(id: string) {
+  return apiRequest<ReviewTask>(`/api/review-tasks/${id}/unskip`, {
+    method: 'PATCH',
+  })
+}
+
 export type SettingsResponse = {
   llmProvider: string
   llmBaseUrl: string | null

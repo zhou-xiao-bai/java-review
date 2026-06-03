@@ -8,6 +8,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   SkipForward,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -20,6 +21,7 @@ import {
   getToday,
   regenerateToday,
   skipReviewTask,
+  unskipReviewTask,
   type ReviewTask,
   type ReviewTaskGroup,
   type SummaryMetric,
@@ -72,6 +74,13 @@ export function TodayPage() {
     },
   })
 
+  const unskipMutation = useMutation({
+    mutationFn: unskipReviewTask,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+    },
+  })
+
   const plan = todayQuery.data
   const taskCount = useMemo(
     () => plan?.groups.reduce((count, group) => count + group.tasks.length, 0) ?? 0,
@@ -94,6 +103,7 @@ export function TodayPage() {
     getApiErrorMessage(regenerateMutation.error, '') ||
     getApiErrorMessage(manualMutation.error, '') ||
     getApiErrorMessage(skipMutation.error, '') ||
+    getApiErrorMessage(unskipMutation.error, '') ||
     (todayQuery.isError ? getApiErrorMessage(todayQuery.error) : '')
 
   function handleManualSubmit(event: FormEvent<HTMLFormElement>) {
@@ -194,7 +204,7 @@ export function TodayPage() {
             </div>
           ) : taskCount === 0 ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
-              暂无任务。可先生成今日计划，或追加一条今日加练。
+              暂无今日计划。请先在范围管理选择复习范围，再补齐今日计划，或追加一条今日加练。
             </div>
           ) : (
             plan?.groups.map((group) => (
@@ -203,7 +213,10 @@ export function TodayPage() {
                 group={group}
                 skippingTaskId={skipMutation.variables}
                 skipPending={skipMutation.isPending}
+                unskippingTaskId={unskipMutation.variables}
+                unskipPending={unskipMutation.isPending}
                 onSkip={(task) => skipMutation.mutate(task.id)}
+                onUnskip={(task) => unskipMutation.mutate(task.id)}
               />
             ))
           )}
@@ -348,13 +361,19 @@ function SummaryCard({
 function TaskGroupPanel({
   group,
   onSkip,
+  onUnskip,
   skipPending,
   skippingTaskId,
+  unskipPending,
+  unskippingTaskId,
 }: {
   group: ReviewTaskGroup
   onSkip: (task: ReviewTask) => void
+  onUnskip: (task: ReviewTask) => void
   skipPending: boolean
   skippingTaskId: string | undefined
+  unskipPending: boolean
+  unskippingTaskId: string | undefined
 }) {
   if (group.tasks.length === 0) {
     return null
@@ -377,7 +396,9 @@ function TaskGroupPanel({
             key={task.id}
             task={task}
             skipPending={skipPending && skippingTaskId === task.id}
+            unskipPending={unskipPending && unskippingTaskId === task.id}
             onSkip={() => onSkip(task)}
+            onUnskip={() => onUnskip(task)}
           />
         ))}
       </div>
@@ -387,14 +408,20 @@ function TaskGroupPanel({
 
 function TaskRow({
   onSkip,
+  onUnskip,
   skipPending,
+  unskipPending,
   task,
 }: {
   onSkip: () => void
+  onUnskip: () => void
   skipPending: boolean
+  unskipPending: boolean
   task: ReviewTask
 }) {
   const canSkip = ['pending', 'in_progress'].includes(task.status)
+  const canUnskip = task.status === 'skipped'
+  const actionPending = skipPending || unskipPending
   return (
     <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_170px_120px_44px]">
       <div className="min-w-0">
@@ -427,20 +454,37 @@ function TaskRow({
       </div>
 
       <div className="flex items-center lg:justify-end">
-        <button
-          type="button"
-          title="跳过任务"
-          aria-label="跳过任务"
-          disabled={!canSkip || skipPending}
-          onClick={onSkip}
-          className="inline-flex size-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {skipPending ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <SkipForward className="size-4" aria-hidden="true" />
-          )}
-        </button>
+        {canUnskip ? (
+          <button
+            type="button"
+            title="取消跳过"
+            aria-label="取消跳过"
+            disabled={actionPending}
+            onClick={onUnskip}
+            className="inline-flex size-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {unskipPending ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <RotateCcw className="size-4" aria-hidden="true" />
+            )}
+          </button>
+        ) : (
+          <button
+            type="button"
+            title="跳过任务"
+            aria-label="跳过任务"
+            disabled={!canSkip || actionPending}
+            onClick={onSkip}
+            className="inline-flex size-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {skipPending ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <SkipForward className="size-4" aria-hidden="true" />
+            )}
+          </button>
+        )}
       </div>
     </div>
   )

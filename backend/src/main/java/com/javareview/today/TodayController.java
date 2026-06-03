@@ -64,6 +64,13 @@ public class TodayController {
 		return todayPlanService.skipTask(currentUser(principal), id);
 	}
 
+	@PatchMapping("/review-tasks/{id}/unskip")
+	public ReviewTaskResponse unskipTask(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,
+			@PathVariable UUID id) {
+		return todayPlanService.unskipTask(currentUser(principal), id);
+	}
+
 	private User currentUser(org.springframework.security.core.userdetails.User principal) {
 		if (principal == null) {
 			throw new BadCredentialsException("Not authenticated.");

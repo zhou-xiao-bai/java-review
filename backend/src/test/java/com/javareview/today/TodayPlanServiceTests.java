@@ -1,10 +1,12 @@
 package com.javareview.today;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -14,6 +16,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -57,6 +60,18 @@ class TodayPlanServiceTests {
 		user = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
 		topic = new Topic(new Domain(java.util.UUID.randomUUID(), "spring", "Spring", 40),
 				"spring-transactions", "Spring 事务", TopicSource.BUILTIN, true);
+	}
+
+	@Test
+	void getTodayDoesNotGeneratePlanWhenNoTasksExist() {
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
+
+		TodayPlanResponse response = todayPlanService.getToday(user);
+
+		assertThat(response.scheduledMinutes()).isZero();
+		assertThat(response.groups()).allSatisfy(group -> assertThat(group.tasks()).isEmpty());
+		verify(reviewTaskRepository).findPlan(user.getId(), TODAY);
+		verifyNoInteractions(reviewPointRepository);
 	}
 
 	@Test
@@ -142,6 +157,46 @@ class TodayPlanServiceTests {
 		assertThat(response.groups().get(1).tasks())
 				.extracting(task -> task.pointTitle())
 				.containsExactly("传播行为与嵌套调用");
+	}
+
+	@Test
+	void unskipRestoresSkippedTaskToPending() {
+		ReviewTask task = new ReviewTask(
+				user,
+				point("传播行为与嵌套调用", 5, 4, 5),
+				TODAY,
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		task.skip(Instant.parse("2026-06-02T08:00:00Z"));
+		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId()))
+				.thenReturn(Optional.of(task));
+
+		var response = todayPlanService.unskipTask(user, task.getId());
+
+		assertThat(response.status()).isEqualTo("pending");
+		assertThat(response.completedAt()).isNull();
+		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.PENDING);
+		assertThat(task.getCompletedAt()).isNull();
+	}
+
+	@Test
+	void unskipRejectsTasksThatWereNotSkipped() {
+		ReviewTask task = new ReviewTask(
+				user,
+				point("传播行为与嵌套调用", 5, 4, 5),
+				TODAY,
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId()))
+				.thenReturn(Optional.of(task));
+
+		assertThatThrownBy(() -> todayPlanService.unskipTask(user, task.getId()))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessage("Only skipped tasks can be restored.");
+
+		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.PENDING);
 	}
 
 	private ReviewPoint point(String title, int importance, int difficulty, int frequency) {

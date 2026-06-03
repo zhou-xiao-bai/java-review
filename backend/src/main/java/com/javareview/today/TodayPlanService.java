@@ -121,13 +121,24 @@ public class TodayPlanService {
 
 	@Transactional
 	public ReviewTaskResponse skipTask(User user, UUID taskId) {
-		ReviewTask task = reviewTaskRepository.findById(taskId)
-				.orElseThrow(() -> new ResourceNotFoundException("Review task not found."));
-		if (!task.getUser().getId().equals(user.getId())) {
-			throw new ResourceNotFoundException("Review task not found.");
-		}
+		ReviewTask task = requireTask(user, taskId);
 		task.skip(Instant.now(clock));
 		return toTaskResponse(task);
+	}
+
+	@Transactional
+	public ReviewTaskResponse unskipTask(User user, UUID taskId) {
+		ReviewTask task = requireTask(user, taskId);
+		if (task.getStatus() != ReviewTaskStatus.SKIPPED) {
+			throw new IllegalStateException("Only skipped tasks can be restored.");
+		}
+		task.unskip();
+		return toTaskResponse(task);
+	}
+
+	private ReviewTask requireTask(User user, UUID taskId) {
+		return reviewTaskRepository.findByIdAndUserIdWithPoint(taskId, user.getId())
+				.orElseThrow(() -> new ResourceNotFoundException("Review task not found."));
 	}
 
 	private int addCarryOverTasks(
