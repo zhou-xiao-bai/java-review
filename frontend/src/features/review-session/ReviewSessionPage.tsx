@@ -271,16 +271,157 @@ function TurnCard({ turn }: { turn: ReviewSession['turns'][number] }) {
   const isUser = turn.role === 'user'
   const isQuestion = turn.turnType === 'question' || turn.turnType === 'follow_up'
   return (
-    <div className={cn('rounded-lg border px-4 py-3 text-sm shadow-sm', isUser ? 'border-slate-200 bg-slate-50 text-slate-900' : 'border-emerald-100 bg-emerald-50 text-emerald-950')}>
+    <div className={cn('rounded-lg border bg-white px-4 py-3 text-sm shadow-sm', isUser ? 'border-slate-200 text-slate-900' : 'border-emerald-100 text-slate-900')}>
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className={cn('text-xs font-semibold', isUser ? 'text-slate-500' : 'text-emerald-700')}>
           {isUser ? '我' : '面试官'}
         </div>
-        <div className="rounded bg-white/70 px-2 py-0.5 text-xs text-slate-500">{turnTypeLabel(turn.turnType)}</div>
+        <div className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{turnTypeLabel(turn.turnType)}</div>
       </div>
-      <div className={cn('whitespace-pre-wrap leading-7', isQuestion && !isUser ? 'text-base font-medium' : '')}>{turn.content}</div>
+      <MessageContent content={turn.content} prominent={isQuestion && !isUser} />
     </div>
   )
+}
+
+function MessageContent({ content, prominent }: { content: string; prominent: boolean }) {
+  const blocks = parseMarkdownLite(content)
+  return (
+    <div className={cn('space-y-3 leading-6 text-slate-800', prominent ? 'text-sm' : 'text-sm')}>
+      {blocks.map((block, index) => {
+        if (block.type === 'code') {
+          return <CodeBlock key={index} content={block.content} />
+        }
+        if (block.type === 'list') {
+          return (
+            <ol key={index} className="space-y-1 rounded-md bg-slate-50 px-4 py-3 pl-7 text-sm text-slate-800">
+              {block.items.map((item, itemIndex) => (
+                <li key={itemIndex} className="list-decimal pl-1">
+                  <InlineCode text={item} />
+                </li>
+              ))}
+            </ol>
+          )
+        }
+        return (
+          <p key={index} className={cn('text-slate-800', prominent ? 'font-medium' : '')}>
+            <InlineCode text={block.content} />
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+function CodeBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = content.split('\n')
+  const collapsible = lines.length > 18
+  const visibleContent = !collapsible || expanded ? content : lines.slice(0, 18).join('\n')
+  return (
+    <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+      <pre className="overflow-x-auto px-3 py-2 font-mono text-[12px] leading-5 text-slate-800">
+        <code>{visibleContent}</code>
+      </pre>
+      {collapsible ? (
+        <button
+          className="h-9 w-full border-t border-slate-200 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50"
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? '收起代码' : `展开全部 ${lines.length} 行代码`}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function InlineCode({ text }: { text: string }) {
+  const parts = text.split(/(`[^`]+`)/g).filter(Boolean)
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.startsWith('`') && part.endsWith('`') ? (
+          <code key={index} className="rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-[0.9em] text-emerald-800 ring-1 ring-emerald-200">
+            {part.slice(1, -1)}
+          </code>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      )}
+    </>
+  )
+}
+
+type MessageBlock =
+  | { type: 'paragraph'; content: string }
+  | { type: 'code'; content: string }
+  | { type: 'list'; items: string[] }
+
+function parseMarkdownLite(content: string): MessageBlock[] {
+  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  const blocks: MessageBlock[] = []
+  let paragraph: string[] = []
+  let list: string[] = []
+  let code: string[] = []
+  let inCode = false
+
+  function flushParagraph() {
+    if (paragraph.length > 0) {
+      blocks.push({ type: 'paragraph', content: paragraph.join(' ') })
+      paragraph = []
+    }
+  }
+
+  function flushList() {
+    if (list.length > 0) {
+      blocks.push({ type: 'list', items: list })
+      list = []
+    }
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd()
+    if (line.trim().startsWith('```')) {
+      if (inCode) {
+        blocks.push({ type: 'code', content: code.join('\n').trimEnd() })
+        code = []
+        inCode = false
+      } else {
+        flushParagraph()
+        flushList()
+        inCode = true
+      }
+      continue
+    }
+
+    if (inCode) {
+      code.push(rawLine)
+      continue
+    }
+
+    if (!line.trim()) {
+      flushParagraph()
+      flushList()
+      continue
+    }
+
+    const listMatch = line.match(/^\s*\d+[.、]\s+(.+)$/)
+    if (listMatch) {
+      flushParagraph()
+      list.push(listMatch[1])
+      continue
+    }
+
+    flushList()
+    paragraph.push(line.trim())
+  }
+
+  if (inCode && code.length > 0) {
+    blocks.push({ type: 'code', content: code.join('\n').trimEnd() })
+  }
+  flushParagraph()
+  flushList()
+  return blocks.length > 0 ? blocks : [{ type: 'paragraph', content }]
 }
 
 function turnTypeLabel(type: string) {
