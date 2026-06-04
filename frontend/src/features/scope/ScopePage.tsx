@@ -16,6 +16,7 @@ import {
   getTopics,
   initializeTopicPoints,
   type TopicSummary,
+  updateTopicPlanning,
   updateTopicSelection,
   updateTopicSelections,
 } from '@/lib/api'
@@ -106,6 +107,24 @@ export function ScopePage() {
     },
   })
 
+  const planningMutation = useMutation({
+    mutationFn: ({
+      id,
+      interviewValue,
+      planEnabled,
+      relevanceTier,
+    }: {
+      id: string
+      interviewValue: number
+      planEnabled: boolean
+      relevanceTier: TopicSummary['relevanceTier']
+    }) => updateTopicPlanning(id, { interviewValue, planEnabled, relevanceTier }),
+    onSuccess: async (topic) => {
+      setSelectedTopicId(topic.id)
+      await queryClient.invalidateQueries({ queryKey: topicsQueryKey })
+    },
+  })
+
   const createMutation = useMutation({
     mutationFn: createTopic,
     onSuccess: async (topic) => {
@@ -121,6 +140,7 @@ export function ScopePage() {
     getApiErrorMessage(selectionMutation.error, '') ||
     getApiErrorMessage(bulkSelectionMutation.error, '') ||
     getApiErrorMessage(initializeMutation.error, '') ||
+    getApiErrorMessage(planningMutation.error, '') ||
     getApiErrorMessage(createMutation.error, '') ||
     (topicsQuery.isError ? getApiErrorMessage(topicsQuery.error) : '')
 
@@ -340,9 +360,18 @@ export function ScopePage() {
 
         <TopicDetailPanel
           initializePending={initializeMutation.isPending}
+          planningPending={planningMutation.isPending}
           selectionPending={selectionPending}
           topic={selectedTopic}
           onInitialize={(topic) => initializeMutation.mutate(topic.id)}
+          onPlanningChange={(topic, patch) =>
+            planningMutation.mutate({
+              id: topic.id,
+              interviewValue: patch.interviewValue ?? topic.interviewValue,
+              planEnabled: patch.planEnabled ?? topic.planEnabled,
+              relevanceTier: patch.relevanceTier ?? topic.relevanceTier,
+            })
+          }
           onToggle={(topic, selected) =>
             selectionMutation.mutate({ id: topic.id, selected })
           }
@@ -435,6 +464,8 @@ function TopicRow({
   onPick: () => void
   onToggle: (selected: boolean) => void
 }) {
+  const autoPlannable = topic.planEnabled && isAutoPlannableTier(topic.relevanceTier)
+
   return (
     <div
       className={cn(
@@ -472,11 +503,23 @@ function TopicRow({
                 手动
               </span>
             ) : null}
+            <span
+              className={cn(
+                'rounded px-1.5 py-0.5 text-xs font-medium',
+                autoPlannable
+                  ? 'bg-emerald-50 text-emerald-700'
+                  : 'bg-slate-100 text-slate-500',
+              )}
+            >
+              {tierLabel(topic.relevanceTier)}
+            </span>
           </div>
           <div className="mt-1 truncate text-xs text-slate-500">
             {topic.weakPointSummary.length > 0
               ? topic.weakPointSummary.join(' / ')
-              : '暂无薄弱点记录'}
+              : autoPlannable
+                ? '暂无薄弱点记录'
+                : '不进入自动计划'}
           </div>
         </button>
       </div>
@@ -493,15 +536,22 @@ function TopicRow({
 
 function TopicDetailPanel({
   initializePending,
+  planningPending,
   selectionPending,
   topic,
   onInitialize,
+  onPlanningChange,
   onToggle,
 }: {
   initializePending: boolean
+  planningPending: boolean
   selectionPending: boolean
   topic: TopicSummary | null
   onInitialize: (topic: TopicSummary) => void
+  onPlanningChange: (
+    topic: TopicSummary,
+    patch: Partial<Pick<TopicSummary, 'interviewValue' | 'planEnabled' | 'relevanceTier'>>,
+  ) => void
   onToggle: (topic: TopicSummary, selected: boolean) => void
 }) {
   if (!topic) {
@@ -539,7 +589,68 @@ function TopicDetailPanel({
           label="已覆盖"
           value={`${topic.coveredReviewPointCount}/${topic.reviewPointCount}`}
         />
-        <PanelMetric label="来源" value={topic.source === 'MANUAL' ? '手动' : '内置'} />
+        <PanelMetric label="价值" value={`${topic.interviewValue}/5`} />
+      </div>
+
+      <div className="mt-5 rounded-md border border-slate-200 p-3">
+        <div className="text-sm font-semibold text-slate-950">计划策略</div>
+        <div className="mt-3 grid gap-3">
+          <label className="grid gap-1.5 text-xs font-medium text-slate-500">
+            层级
+            <select
+              className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-slate-500 disabled:opacity-60"
+              disabled={planningPending}
+              value={topic.relevanceTier}
+              onChange={(event) =>
+                onPlanningChange(topic, {
+                  relevanceTier: event.target.value as TopicSummary['relevanceTier'],
+                  planEnabled: isAutoPlannableTier(event.target.value)
+                    ? topic.planEnabled || !isAutoPlannableTier(topic.relevanceTier)
+                    : false,
+                })
+              }
+            >
+              <option value="CORE">核心高频</option>
+              <option value="PROJECT">项目相关</option>
+              <option value="SUPPLEMENT">低频补充</option>
+              <option value="ARCHIVED">暂不复习</option>
+            </select>
+          </label>
+
+          <label className="grid gap-1.5 text-xs font-medium text-slate-500">
+            面试价值
+            <select
+              className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-slate-500 disabled:opacity-60"
+              disabled={planningPending}
+              value={topic.interviewValue}
+              onChange={(event) =>
+                onPlanningChange(topic, { interviewValue: Number(event.target.value) })
+              }
+            >
+              {[1, 2, 3, 4, 5].map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              checked={topic.planEnabled && isAutoPlannableTier(topic.relevanceTier)}
+              className="size-4 rounded border-slate-300"
+              disabled={planningPending || !isAutoPlannableTier(topic.relevanceTier)}
+              type="checkbox"
+              onChange={(event) =>
+                onPlanningChange(topic, { planEnabled: event.target.checked })
+              }
+            />
+            进入自动计划
+          </label>
+          <div className="text-xs leading-5 text-slate-500">
+            自动计划只会抽取核心高频和项目相关主题；低频补充可手动加练。
+          </div>
+        </div>
       </div>
 
       <div className="mt-5 space-y-3">
@@ -622,6 +733,18 @@ function PanelMetric({ label, value }: { label: string; value: string }) {
 
 function formatMastery(value: number) {
   return `${Math.round((value / 5) * 100)}%`
+}
+
+function tierLabel(value: TopicSummary['relevanceTier']) {
+  if (value === 'CORE') return '核心'
+  if (value === 'PROJECT') return '项目'
+  if (value === 'SUPPLEMENT') return '补充'
+  if (value === 'ARCHIVED') return '归档'
+  return value
+}
+
+function isAutoPlannableTier(value: string) {
+  return value === 'CORE' || value === 'PROJECT'
 }
 
 function formatDate(value: string) {

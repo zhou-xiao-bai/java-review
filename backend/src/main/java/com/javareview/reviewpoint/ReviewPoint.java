@@ -73,6 +73,10 @@ public class ReviewPoint {
 	private String nextProbe;
 
 	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(name = "mastery_card", columnDefinition = "jsonb")
+	private MasteryCard masteryCard;
+
+	@JdbcTypeCode(SqlTypes.JSON)
 	@Column(name = "recent_question_types", nullable = false, columnDefinition = "jsonb")
 	private List<String> recentQuestionTypes = new ArrayList<>();
 
@@ -169,6 +173,10 @@ public class ReviewPoint {
 		return nextProbe;
 	}
 
+	public MasteryCard getMasteryCard() {
+		return masteryCard;
+	}
+
 	public void updateReviewProgress(
 			BigDecimal mastery,
 			ReviewPointStatus status,
@@ -186,5 +194,9 @@ public class ReviewPoint {
 		this.wrongCount = wrongCount;
 		this.weakPoints = new ArrayList<>(weakPoints);
 		this.nextProbe = nextProbe;
+	}
+
+	public void updateMasteryCard(MasteryCard masteryCard) {
+		this.masteryCard = masteryCard;
 	}
 }

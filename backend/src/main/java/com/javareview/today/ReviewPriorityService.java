@@ -38,6 +38,7 @@ public class ReviewPriorityService {
 		}
 		score = score
 				.add(overdueBonus(point, today))
+				.add(BigDecimal.valueOf(point.getTopic().getInterviewValue() * 3L))
 				.add(BigDecimal.valueOf(point.getImportance() * 2L))
 				.add(BigDecimal.valueOf(point.getInterviewFrequency() * 2L))
 				.add(BigDecimal.valueOf(point.getDifficulty()))

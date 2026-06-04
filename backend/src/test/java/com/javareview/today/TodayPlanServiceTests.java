@@ -34,6 +34,7 @@ import com.javareview.settings.SettingsService;
 import com.javareview.settings.UserSettings;
 import com.javareview.today.TodayDtos.TodayPlanResponse;
 import com.javareview.topic.Domain;
+import com.javareview.topic.RelevanceTier;
 import com.javareview.topic.Topic;
 import com.javareview.topic.TopicSource;
 
@@ -112,7 +113,7 @@ class TodayPlanServiceTests {
 	}
 
 	@Test
-	void carryOverTasksMustBelongToSelectedTopics() {
+	void carryOverTasksMustBelongToAutoPlannableTopics() {
 		ReviewPoint selectedPoint = point("事务代理生效边界", 5, 5, 5);
 		Topic unselectedTopic = new Topic(
 				new Domain(java.util.UUID.randomUUID(), "redis", "Redis", 50),
@@ -126,6 +127,20 @@ class TodayPlanServiceTests {
 				5,
 				5,
 				5,
+				"next probe");
+		Topic supplementTopic = new Topic(
+				new Domain(java.util.UUID.randomUUID(), "java-foundation", "Java 基础", 10),
+				"java-date-time",
+				"java.time",
+				TopicSource.BUILTIN,
+				true);
+		supplementTopic.updatePlanning(RelevanceTier.SUPPLEMENT, false, 1);
+		ReviewPoint supplementPoint = new ReviewPoint(
+				supplementTopic,
+				"java.time API 语义",
+				3,
+				2,
+				1,
 				"next probe");
 		ReviewTask selectedOldTask = new ReviewTask(
 				user,
@@ -141,9 +156,16 @@ class TodayPlanServiceTests {
 				ReviewTaskType.DUE,
 				BigDecimal.TEN,
 				10);
+		ReviewTask supplementOldTask = new ReviewTask(
+				user,
+				supplementPoint,
+				TODAY.minusDays(1),
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
 		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
 		when(reviewTaskRepository.findCarryOverCandidates(eq(user.getId()), eq(TODAY), anyCollection()))
-				.thenReturn(List.of(unselectedOldTask, selectedOldTask));
+				.thenReturn(List.of(unselectedOldTask, supplementOldTask, selectedOldTask));
 		when(reviewPointRepository.findDueCandidates(eq(user.getId()), eq(TODAY), any()))
 				.thenReturn(List.of());
 		when(reviewPointRepository.findNewExpansionCandidates(user.getId(), TODAY)).thenReturn(List.of());
@@ -157,7 +179,7 @@ class TodayPlanServiceTests {
 	}
 
 	@Test
-	void dueTasksAreSelectedFromEligibleCandidatesWithoutFixedOrdering() {
+	void dueTasksAreSelectedByPriorityOrder() {
 		ReviewPoint highPriority = duePoint("生产事务失效排查", 5, 5, 5, TODAY.minusDays(3));
 		ReviewPoint lowPriority = duePoint("事务上下文与线程绑定", 2, 2, 2, TODAY.minusDays(1));
 		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
@@ -172,7 +194,7 @@ class TodayPlanServiceTests {
 
 		assertThat(response.groups().get(1).tasks())
 				.extracting(task -> task.pointTitle())
-				.containsExactlyInAnyOrder("生产事务失效排查", "事务上下文与线程绑定");
+				.containsExactly("生产事务失效排查", "事务上下文与线程绑定");
 	}
 
 	@Test

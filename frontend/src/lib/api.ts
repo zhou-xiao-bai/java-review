@@ -140,6 +140,9 @@ export type TopicSummary = {
   title: string
   source: 'BUILTIN' | 'MANUAL' | string
   selected: boolean
+  relevanceTier: 'CORE' | 'PROJECT' | 'SUPPLEMENT' | 'ARCHIVED' | string
+  planEnabled: boolean
+  interviewValue: number
   reviewPointCount: number
   coveredReviewPointCount: number
   averageMastery: number
@@ -201,6 +204,20 @@ export function updateTopicSelections(topicIds: string[], selected: boolean) {
   return apiRequest<TopicsResponse>('/api/topics/selection', {
     method: 'PATCH',
     body: { topicIds, selected },
+  })
+}
+
+export function updateTopicPlanning(
+  id: string,
+  body: {
+    relevanceTier: TopicSummary['relevanceTier']
+    planEnabled: boolean
+    interviewValue: number
+  },
+) {
+  return apiRequest<TopicSummary>(`/api/topics/${id}/planning`, {
+    method: 'PATCH',
+    body,
   })
 }
 
@@ -390,9 +407,21 @@ export type ReviewEvaluation = {
     transferApplication: number
     overall: number
   }
+  weakSignals?: {
+    category: string
+    label: string
+    evidence: string | null
+    severity: number
+  }[]
   weakPoints: string[]
   nextProbe: string
   nextStatus: string
+  masteryCard?: {
+    oneSentence: string
+    answerSkeleton: string[]
+    mustRemember: string[]
+    nextProbe: string
+  } | null
 }
 
 export type ReviewTurn = {
@@ -462,6 +491,9 @@ export type ProgressOverview = {
   unstablePointCount: number
   dueReviewPointCount: number
   completedSessionCount: number
+  openWeaknessCount: number
+  highRiskPointCount: number
+  autoPlannableTopicCount: number
 }
 
 export type DomainProgress = {
@@ -471,6 +503,10 @@ export type DomainProgress = {
   reviewPointCount: number
   averageMastery: number
   unstablePointCount: number
+  duePointCount: number
+  stablePointCount: number
+  uncoveredPointCount: number
+  openWeaknessCount: number
 }
 
 export type TopicProgress = {
@@ -478,8 +514,15 @@ export type TopicProgress = {
   topicTitle: string
   domainName: string
   status: string
+  relevanceTier: string
+  planEnabled: boolean
+  interviewValue: number
   reviewPointCount: number
   unstablePointCount: number
+  duePointCount: number
+  stablePointCount: number
+  uncoveredPointCount: number
+  openWeaknessCount: number
   averageMastery: number
   nextReviewAt: string | null
   weakPointSummary: string[]
@@ -487,9 +530,14 @@ export type TopicProgress = {
 
 export type WeakPointProgress = {
   weakPoint: string
+  category: string
+  evidence: string | null
+  severity: number
+  status: string
   topicTitle: string
   pointTitle: string
   mastery: number
+  createdAt: string | null
 }
 
 export type DueReviewPoint = {
@@ -499,6 +547,8 @@ export type DueReviewPoint = {
   status: string
   mastery: number
   nextReviewAt: string | null
+  dueReason: string
+  nextProbe: string | null
 }
 
 export type RecentReviewSession = {

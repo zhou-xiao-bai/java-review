@@ -16,7 +16,10 @@ public final class ProgressDtos {
 			long reviewPointCount,
 			long unstablePointCount,
 			long dueReviewPointCount,
-			long completedSessionCount) {
+			long completedSessionCount,
+			long openWeaknessCount,
+			long highRiskPointCount,
+			long autoPlannableTopicCount) {
 	}
 
 	public record DomainProgressResponse(
@@ -25,7 +28,11 @@ public final class ProgressDtos {
 			long topicCount,
 			long reviewPointCount,
 			BigDecimal averageMastery,
-			long unstablePointCount) {
+			long unstablePointCount,
+			long duePointCount,
+			long stablePointCount,
+			long uncoveredPointCount,
+			long openWeaknessCount) {
 	}
 
 	public record TopicProgressResponse(
@@ -33,8 +40,15 @@ public final class ProgressDtos {
 			String topicTitle,
 			String domainName,
 			String status,
+			String relevanceTier,
+			boolean planEnabled,
+			int interviewValue,
 			long reviewPointCount,
 			long unstablePointCount,
+			long duePointCount,
+			long stablePointCount,
+			long uncoveredPointCount,
+			long openWeaknessCount,
 			BigDecimal averageMastery,
 			Instant nextReviewAt,
 			List<String> weakPointSummary) {
@@ -42,9 +56,14 @@ public final class ProgressDtos {
 
 	public record WeakPointResponse(
 			String weakPoint,
+			String category,
+			String evidence,
+			int severity,
+			String status,
 			String topicTitle,
 			String pointTitle,
-			BigDecimal mastery) {
+			BigDecimal mastery,
+			Instant createdAt) {
 	}
 
 	public record DueReviewPointResponse(
@@ -53,7 +72,9 @@ public final class ProgressDtos {
 			String pointTitle,
 			String status,
 			BigDecimal mastery,
-			Instant nextReviewAt) {
+			Instant nextReviewAt,
+			String dueReason,
+			String nextProbe) {
 	}
 
 	public record RecentSessionResponse(

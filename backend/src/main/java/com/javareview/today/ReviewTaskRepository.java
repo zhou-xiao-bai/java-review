@@ -65,6 +65,8 @@ public interface ReviewTaskRepository extends JpaRepository<ReviewTask, UUID> {
 			and task.removedAt is null
 			and task.type <> com.javareview.today.ReviewTaskType.MANUAL
 			and topic.selected = true
+			and topic.planEnabled = true
+			and topic.relevanceTier in (com.javareview.topic.RelevanceTier.CORE, com.javareview.topic.RelevanceTier.PROJECT)
 			order by task.taskDate asc, task.priorityScore desc, task.createdAt asc
 			""")
 	List<ReviewTask> findCarryOverCandidates(

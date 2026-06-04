@@ -22,6 +22,7 @@ import com.javareview.reviewpoint.ReviewPointRepository;
 import com.javareview.topic.TopicDtos.CreateTopicRequest;
 import com.javareview.topic.TopicDtos.TopicSummaryResponse;
 import com.javareview.topic.TopicDtos.TopicsResponse;
+import com.javareview.topic.TopicDtos.UpdateTopicPlanningRequest;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionRequest;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionsRequest;
 
@@ -111,7 +112,27 @@ class TopicServiceTests {
 		assertThat(response.title()).isEqualTo("SQL 调优");
 		assertThat(response.source()).isEqualTo("MANUAL");
 		assertThat(response.selected()).isTrue();
+		assertThat(response.relevanceTier()).isEqualTo("PROJECT");
+		assertThat(response.planEnabled()).isTrue();
+		assertThat(response.interviewValue()).isEqualTo(4);
 		assertThat(response.reviewPointCount()).isEqualTo(5);
+	}
+
+	@Test
+	void updatingPlanningControlsAutomaticPlanEligibility() {
+		Domain domain = new Domain(UUID.randomUUID(), "java-foundation", "Java 基础", 10);
+		Topic topic = new Topic(domain, "java-date-time", "java.time", TopicSource.BUILTIN, true);
+		when(topicRepository.findById(topic.getId())).thenReturn(Optional.of(topic));
+		when(reviewPointRepository.findByTopicId(topic.getId())).thenReturn(List.of());
+
+		TopicSummaryResponse response = topicService.updatePlanning(
+				topic.getId(),
+				new UpdateTopicPlanningRequest(RelevanceTier.SUPPLEMENT, false, 1));
+
+		assertThat(topic.isAutoPlannable()).isFalse();
+		assertThat(response.relevanceTier()).isEqualTo("SUPPLEMENT");
+		assertThat(response.planEnabled()).isFalse();
+		assertThat(response.interviewValue()).isEqualTo(1);
 	}
 
 	@Test

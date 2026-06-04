@@ -27,7 +27,10 @@ export function ReviewSessionPage() {
   const [pendingTask, setPendingTask] = useState<ReviewTask | null>(null)
   const [answer, setAnswer] = useState('')
   const [clarifyText, setClarifyText] = useState('')
+  const [pendingAnswerPreview, setPendingAnswerPreview] = useState<string | null>(null)
+  const [pendingClarifyPreview, setPendingClarifyPreview] = useState<string | null>(null)
   const autoStartedTaskIdRef = useRef<string | null>(null)
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null)
   const todayQuery = useQuery({ queryKey: todayQueryKey, queryFn: getToday })
   const tasks = useMemo(
     () => todayQuery.data?.groups.flatMap((group) => group.tasks) ?? [],
@@ -64,8 +67,10 @@ export function ReviewSessionPage() {
     onSuccess: async (nextSession) => {
       setSession(nextSession)
       setAnswer('')
+      setPendingAnswerPreview(null)
       await queryClient.invalidateQueries({ queryKey: todayQueryKey })
     },
+    onError: () => setPendingAnswerPreview(null),
   })
   const unknownMutation = useMutation({
     mutationFn: unknownReviewSession,
@@ -79,7 +84,9 @@ export function ReviewSessionPage() {
     onSuccess: (nextSession) => {
       setSession(nextSession)
       setClarifyText('')
+      setPendingClarifyPreview(null)
     },
+    onError: () => setPendingClarifyPreview(null),
   })
   const skipMutation = useMutation({
     mutationFn: skipReviewSession,
@@ -88,6 +95,11 @@ export function ReviewSessionPage() {
       await queryClient.invalidateQueries({ queryKey: todayQueryKey })
     },
   })
+  const actionPending =
+    answerMutation.isPending ||
+    clarifyMutation.isPending ||
+    unknownMutation.isPending ||
+    skipMutation.isPending
 
   const errorMessage =
     getApiErrorMessage(startMutation.error, '') ||
@@ -129,10 +141,30 @@ export function ReviewSessionPage() {
     todayQuery.isLoading,
   ])
 
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [
+    session?.turns.length,
+    pendingAnswerPreview,
+    pendingClarifyPreview,
+    pendingTask,
+    startMutation.isPending,
+  ])
+
   function submitAnswer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!session) return
-    answerMutation.mutate({ id: session.id, value: answer })
+    const value = answer.trim()
+    if (!value || answerMutation.isPending) return
+    setPendingAnswerPreview(value)
+    answerMutation.mutate({ id: session.id, value })
+  }
+
+  function submitClarification() {
+    if (!session || clarifyMutation.isPending) return
+    const question = clarifyText.trim()
+    setPendingClarifyPreview(question || '请解释题意。')
+    clarifyMutation.mutate({ id: session.id, question })
   }
 
   function startNextTask() {
@@ -306,8 +338,32 @@ export function ReviewSessionPage() {
                   对话记录
                 </div>
                 <div className="space-y-3 p-5">
-                  {pendingTask && startMutation.isPending ? <AiThinking /> : null}
+                  {pendingTask && startMutation.isPending ? (
+                    <AssistantThinking text="正在生成针对当前复习点的题目" />
+                  ) : null}
                   {session?.turns.map((turn) => <TurnCard key={turn.id} turn={turn} />)}
+                  {pendingAnswerPreview ? (
+                    <>
+                      <PendingUserTurn content={pendingAnswerPreview} type="回答" />
+                      <AssistantThinking text="正在拆解你的回答，判断要追问还是收口评分" />
+                    </>
+                  ) : null}
+                  {pendingClarifyPreview ? (
+                    <>
+                      <PendingUserTurn content={pendingClarifyPreview} type="澄清" />
+                      <AssistantThinking text="正在解释题意和回答维度，不展开标准答案" />
+                    </>
+                  ) : null}
+                  {unknownMutation.isPending ? (
+                    <>
+                      <PendingUserTurn content="不会" type="不会" />
+                      <AssistantThinking text="正在收口评分，并生成可复习的掌握卡" />
+                    </>
+                  ) : null}
+                  {skipMutation.isPending ? (
+                    <PendingUserTurn content="跳过本题" type="跳过" />
+                  ) : null}
+                  <div ref={transcriptEndRef} />
                 </div>
               </section>
 
@@ -316,35 +372,38 @@ export function ReviewSessionPage() {
                   <form className="space-y-3" onSubmit={submitAnswer}>
                     <textarea
                       required
-                      className="min-h-36 w-full rounded-md border border-slate-300 p-3 text-sm leading-6 outline-none focus:border-slate-500"
+                      className="min-h-36 w-full rounded-md border border-slate-300 p-3 text-sm leading-6 outline-none focus:border-slate-500 disabled:bg-slate-50 disabled:text-slate-500"
+                      disabled={actionPending}
                       placeholder="输入你的回答"
                       value={answer}
                       onChange={(event) => setAnswer(event.target.value)}
                     />
                     <div className="flex flex-wrap gap-2">
-                      <button className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60" disabled={answerMutation.isPending} type="submit">
+                      <button className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60" disabled={actionPending || !answer.trim()} type="submit">
                         {answerMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-                        提交回答
+                        {answerMutation.isPending ? '正在分析' : '提交回答'}
                       </button>
-                      <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={unknownMutation.isPending} type="button" onClick={() => unknownMutation.mutate(session.id)}>
-                        <HelpCircle className="size-4" />
-                        不会
+                      <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={actionPending} type="button" onClick={() => unknownMutation.mutate(session.id)}>
+                        {unknownMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <HelpCircle className="size-4" />}
+                        {unknownMutation.isPending ? '正在收口' : '不会'}
                       </button>
-                      <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={skipMutation.isPending} type="button" onClick={() => skipMutation.mutate(session.id)}>
-                        <SkipForward className="size-4" />
-                        跳过本题
+                      <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={actionPending} type="button" onClick={() => skipMutation.mutate(session.id)}>
+                        {skipMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <SkipForward className="size-4" />}
+                        {skipMutation.isPending ? '正在跳过' : '跳过本题'}
                       </button>
                     </div>
                   </form>
                   <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                     <input
-                      className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
+                      className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500 disabled:bg-slate-50 disabled:text-slate-500"
+                      disabled={actionPending}
                       placeholder="追问题意"
                       value={clarifyText}
                       onChange={(event) => setClarifyText(event.target.value)}
                     />
-                    <button className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={clarifyMutation.isPending} type="button" onClick={() => clarifyMutation.mutate({ id: session.id, question: clarifyText })}>
-                      追问题意
+                    <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={actionPending} type="button" onClick={submitClarification}>
+                      {clarifyMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <HelpCircle className="size-4" />}
+                      {clarifyMutation.isPending ? '正在澄清' : '追问题意'}
                     </button>
                   </div>
                 </section>
@@ -441,7 +500,7 @@ function StatusTag({ status }: { status: string }) {
   return <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{label}</span>
 }
 
-function AiThinking() {
+function AssistantThinking({ text }: { text: string }) {
   return (
     <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
       <div className="flex items-center gap-2 text-xs font-semibold text-emerald-700">
@@ -458,8 +517,20 @@ function AiThinking() {
             />
           ))}
         </div>
-        <span className="text-sm text-emerald-800">正在生成针对当前复习点的题目</span>
+        <span className="text-sm text-emerald-800">{text}</span>
       </div>
+    </div>
+  )
+}
+
+function PendingUserTurn({ content, type }: { content: string; type: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 shadow-sm">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold text-slate-500">我</div>
+        <div className="rounded bg-white px-2 py-0.5 text-xs text-slate-500">{type} · 发送中</div>
+      </div>
+      <MessageContent content={content} prominent={false} />
     </div>
   )
 }
@@ -667,6 +738,37 @@ function EvaluationPanel({
           <ListBlock title="不准确点" values={evaluation.inaccuratePoints} />
           <TextBlock title="两分钟参考回答" value={evaluation.referenceAnswer} />
           <ListBlock title="薄弱点" values={evaluation.weakPoints} />
+          {evaluation.weakSignals && evaluation.weakSignals.length > 0 ? (
+            <div>
+              <div className="text-sm font-semibold text-slate-950">薄弱证据</div>
+              <div className="mt-2 divide-y divide-slate-100 rounded-md bg-slate-50">
+                {evaluation.weakSignals.map((signal, index) => (
+                  <div key={`${signal.label}-${index}`} className="px-3 py-2 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium text-slate-900">{signal.label}</span>
+                      <span className="shrink-0 rounded bg-white px-2 py-0.5 text-xs text-slate-500">
+                        严重度 {signal.severity}
+                      </span>
+                    </div>
+                    {signal.evidence ? (
+                      <div className="mt-1 text-xs leading-5 text-slate-500">{signal.evidence}</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {evaluation.masteryCard ? (
+            <div>
+              <div className="text-sm font-semibold text-slate-950">简略掌握卡</div>
+              <div className="mt-2 space-y-3 rounded-md bg-emerald-50 px-3 py-3 text-sm text-emerald-950">
+                <div className="font-medium">{evaluation.masteryCard.oneSentence}</div>
+                <ListBlock title="回答骨架" values={evaluation.masteryCard.answerSkeleton} />
+                <ListBlock title="必须记住" values={evaluation.masteryCard.mustRemember} />
+                <TextBlock title="下次探针" value={evaluation.masteryCard.nextProbe} />
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="mt-3 text-sm text-slate-500">本题已跳过，未更新掌握度。</div>

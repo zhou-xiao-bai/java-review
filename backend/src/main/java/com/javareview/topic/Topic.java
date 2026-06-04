@@ -39,6 +39,16 @@ public class Topic {
 	@Column(nullable = false)
 	private boolean selected;
 
+	@Enumerated(EnumType.STRING)
+	@Column(name = "relevance_tier", nullable = false, length = 32)
+	private RelevanceTier relevanceTier = RelevanceTier.CORE;
+
+	@Column(name = "plan_enabled", nullable = false)
+	private boolean planEnabled = true;
+
+	@Column(name = "interview_value", nullable = false)
+	private int interviewValue = 3;
+
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private Instant createdAt;
 
@@ -55,6 +65,10 @@ public class Topic {
 		this.title = title;
 		this.source = source;
 		this.selected = selected;
+		if (source == TopicSource.MANUAL) {
+			this.relevanceTier = RelevanceTier.PROJECT;
+			this.interviewValue = 4;
+		}
 	}
 
 	@PrePersist
@@ -95,5 +109,27 @@ public class Topic {
 
 	public void setSelected(boolean selected) {
 		this.selected = selected;
+	}
+
+	public RelevanceTier getRelevanceTier() {
+		return relevanceTier;
+	}
+
+	public boolean isPlanEnabled() {
+		return planEnabled;
+	}
+
+	public int getInterviewValue() {
+		return interviewValue;
+	}
+
+	public boolean isAutoPlannable() {
+		return selected && planEnabled && relevanceTier.autoPlannable();
+	}
+
+	public void updatePlanning(RelevanceTier relevanceTier, boolean planEnabled, int interviewValue) {
+		this.relevanceTier = relevanceTier;
+		this.planEnabled = planEnabled;
+		this.interviewValue = interviewValue;
 	}
 }

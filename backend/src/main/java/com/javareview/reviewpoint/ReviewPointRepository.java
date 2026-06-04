@@ -24,6 +24,8 @@ public interface ReviewPointRepository extends JpaRepository<ReviewPoint, UUID> 
 			join fetch point.topic topic
 			join fetch topic.domain domain
 			where topic.selected = true
+			and topic.planEnabled = true
+			and topic.relevanceTier in (com.javareview.topic.RelevanceTier.CORE, com.javareview.topic.RelevanceTier.PROJECT)
 			and point.nextReviewAt is not null
 			and point.nextReviewAt <= :endOfDay
 			and not exists (
@@ -45,6 +47,8 @@ public interface ReviewPointRepository extends JpaRepository<ReviewPoint, UUID> 
 			join fetch point.topic topic
 			join fetch topic.domain domain
 			where topic.selected = true
+			and topic.planEnabled = true
+			and topic.relevanceTier in (com.javareview.topic.RelevanceTier.CORE, com.javareview.topic.RelevanceTier.PROJECT)
 			and point.status = com.javareview.reviewpoint.ReviewPointStatus.UNCOVERED
 			and not exists (
 				select 1

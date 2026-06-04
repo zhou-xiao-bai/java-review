@@ -7,7 +7,6 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashSet;
@@ -191,7 +190,7 @@ public class TodayPlanService {
 			if (oldTask.getReviewPoint() == null) {
 				continue;
 			}
-			if (!oldTask.getReviewPoint().getTopic().isSelected()) {
+			if (!oldTask.getReviewPoint().getTopic().isAutoPlannable()) {
 				continue;
 			}
 			if (remainingMinutes < oldTask.getEstimatedMinutes()) {
@@ -224,8 +223,9 @@ public class TodayPlanService {
 				.filter(point -> plannedReviewPointIds.add(point.getId()))
 				.map(point -> new PrioritizedPoint(point, reviewPriorityService.forReviewPoint(point, today, false)))
 				.toList();
-		dueCandidates = new ArrayList<>(dueCandidates);
-		Collections.shuffle(dueCandidates);
+		dueCandidates = dueCandidates.stream()
+				.sorted(prioritizedPointComparator())
+				.toList();
 		for (PrioritizedPoint candidate : dueCandidates) {
 			if (remainingMinutes < DEFAULT_TASK_MINUTES) {
 				break;
@@ -254,8 +254,9 @@ public class TodayPlanService {
 				.filter(point -> plannedReviewPointIds.add(point.getId()))
 				.map(point -> new PrioritizedPoint(point, reviewPriorityService.forReviewPoint(point, today, false)))
 				.toList();
-		newCandidates = new ArrayList<>(newCandidates);
-		Collections.shuffle(newCandidates);
+		newCandidates = newCandidates.stream()
+				.sorted(prioritizedPointComparator())
+				.toList();
 		int minutesLeft = remainingMinutes;
 		for (PrioritizedPoint candidate : newCandidates) {
 			if (minutesLeft < DEFAULT_TASK_MINUTES) {
@@ -414,6 +415,24 @@ public class TodayPlanService {
 				&& task.getReviewPoint() != null
 				&& task.getType() != ReviewTaskType.MANUAL
 				&& task.getStatus() != ReviewTaskStatus.SKIPPED;
+	}
+
+	private static Comparator<PrioritizedPoint> prioritizedPointComparator() {
+		return (left, right) -> {
+			int result = right.priority().compareTo(left.priority());
+			if (result != 0) {
+				return result;
+			}
+			result = Integer.compare(right.point().getTopic().getInterviewValue(), left.point().getTopic().getInterviewValue());
+			if (result != 0) {
+				return result;
+			}
+			result = left.point().getTopic().getTitle().compareTo(right.point().getTopic().getTitle());
+			if (result != 0) {
+				return result;
+			}
+			return left.point().getTitle().compareTo(right.point().getTitle());
+		};
 	}
 
 	private static String trimRequired(String value, String field) {

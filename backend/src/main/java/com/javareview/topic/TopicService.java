@@ -27,6 +27,7 @@ import com.javareview.topic.TopicDtos.DomainTopicsResponse;
 import com.javareview.topic.TopicDtos.TopicSummaryResponse;
 import com.javareview.topic.TopicDtos.TopicTotalsResponse;
 import com.javareview.topic.TopicDtos.TopicsResponse;
+import com.javareview.topic.TopicDtos.UpdateTopicPlanningRequest;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionRequest;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionsRequest;
 
@@ -276,6 +277,16 @@ public class TopicService {
 	}
 
 	@Transactional
+	public TopicSummaryResponse updatePlanning(UUID topicId, UpdateTopicPlanningRequest request) {
+		Topic topic = requireTopic(topicId);
+		topic.updatePlanning(
+				request.relevanceTier(),
+				Boolean.TRUE.equals(request.planEnabled()),
+				request.interviewValue());
+		return toTopicSummary(topic, reviewPointRepository.findByTopicId(topic.getId()));
+	}
+
+	@Transactional
 	public TopicSummaryResponse initializePoints(UUID topicId) {
 		Topic topic = requireTopic(topicId);
 		initializePoints(topic);
@@ -326,6 +337,9 @@ public class TopicService {
 				topic.getTitle(),
 				topic.getSource().name(),
 				topic.isSelected(),
+				topic.getRelevanceTier().name(),
+				topic.isPlanEnabled(),
+				topic.getInterviewValue(),
 				points.size(),
 				aggregate.coveredCount(),
 				aggregate.averageMastery(),

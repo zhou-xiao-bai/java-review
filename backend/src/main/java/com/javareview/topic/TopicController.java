@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.javareview.topic.TopicDtos.CreateTopicRequest;
 import com.javareview.topic.TopicDtos.TopicSummaryResponse;
 import com.javareview.topic.TopicDtos.TopicsResponse;
+import com.javareview.topic.TopicDtos.UpdateTopicPlanningRequest;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionRequest;
 import com.javareview.topic.TopicDtos.UpdateTopicSelectionsRequest;
 
@@ -52,6 +53,13 @@ public class TopicController {
 	@PatchMapping("/selection")
 	public TopicsResponse updateSelections(@Valid @RequestBody UpdateTopicSelectionsRequest request) {
 		return topicService.updateSelections(request);
+	}
+
+	@PatchMapping("/{id}/planning")
+	public TopicSummaryResponse updatePlanning(
+			@PathVariable UUID id,
+			@Valid @RequestBody UpdateTopicPlanningRequest request) {
+		return topicService.updatePlanning(id, request);
 	}
 
 	@PostMapping("/{id}/initialize-points")
