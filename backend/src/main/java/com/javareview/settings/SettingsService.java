@@ -46,7 +46,8 @@ public class SettingsService {
 				trimRequired(request.activeLlmConfigId(), "activeLlmConfigId"),
 				configs,
 				request.requestTimeoutSeconds(),
-				request.dailyReviewMinutes());
+				request.dailyReviewMinutes(),
+				ReviewedPointSchedulingPolicy.fromApiValue(request.reviewedPointSchedulingPolicy()));
 		return toResponse(settingsRepository.save(settings));
 	}
 
@@ -73,7 +74,8 @@ public class SettingsService {
 				settings.getActiveLlmConfigId(),
 				settings.getLlmConfigs().stream().map(SettingsService::toConfigResponse).toList(),
 				settings.getRequestTimeoutSeconds(),
-				settings.getDailyReviewMinutes());
+				settings.getDailyReviewMinutes(),
+				settings.getReviewedPointSchedulingPolicy().apiValue());
 	}
 
 	private static LlmConfigResponse toConfigResponse(LlmConfig config) {

@@ -62,6 +62,7 @@ class SettingsServiceTests {
 		assertThat(response.llmApiKeyMasked()).doesNotContain("secret");
 		assertThat(response.llmConfigs()).hasSize(1);
 		assertThat(response.llmConfigs().getFirst().apiKeyMasked()).isEqualTo("sk-t****alue");
+		assertThat(response.reviewedPointSchedulingPolicy()).isEqualTo("follow_scope");
 	}
 
 	@Test
@@ -75,7 +76,8 @@ class SettingsServiceTests {
 				"default",
 				List.of(new SettingsDtos.LlmConfigRequest("default", "默认", "openai-compatible", "https://api.example.com/v1", "********", "gpt-next")),
 				40,
-				70));
+				70,
+				"follow_scope"));
 
 		assertThat(settings.getLlmApiKey()).isEqualTo("sk-original");
 		assertThat(settings.getLlmModel()).isEqualTo("gpt-next");
@@ -93,11 +95,29 @@ class SettingsServiceTests {
 						new SettingsDtos.LlmConfigRequest("primary", "主站", "openai-compatible", "https://api.primary.test/v1", "sk-primary", "gpt-a"),
 						new SettingsDtos.LlmConfigRequest("backup", "备用", "openai-compatible", "https://api.backup.test/v1", "sk-backup", "gpt-b")),
 				30,
-				60));
+				60,
+				"follow_scope"));
 
 		assertThat(settings.getActiveLlmConfigId()).isEqualTo("backup");
 		assertThat(settings.getLlmBaseUrl()).isEqualTo("https://api.backup.test/v1");
 		assertThat(settings.getLlmApiKey()).isEqualTo("sk-backup");
 		assertThat(settings.getLlmModel()).isEqualTo("gpt-b");
+	}
+
+	@Test
+	void reviewedPointSchedulingPolicyCanBeUpdated() {
+		UserSettings settings = new UserSettings(user);
+		when(settingsRepository.findByUserId(user.getId())).thenReturn(Optional.of(settings));
+		when(settingsRepository.save(settings)).thenReturn(settings);
+
+		var response = settingsService.updateSettings(user, new UpdateSettingsRequest(
+				"default",
+				List.of(new SettingsDtos.LlmConfigRequest("default", "默认", "openai-compatible", "https://api.example.com/v1", "", "gpt-test")),
+				30,
+				60,
+				"keep_reviewed"));
+
+		assertThat(settings.getReviewedPointSchedulingPolicy()).isEqualTo(ReviewedPointSchedulingPolicy.KEEP_REVIEWED);
+		assertThat(response.reviewedPointSchedulingPolicy()).isEqualTo("keep_reviewed");
 	}
 }

@@ -30,6 +30,7 @@ import com.javareview.auth.UserRole;
 import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointRepository;
 import com.javareview.reviewpoint.ReviewPointStatus;
+import com.javareview.settings.ReviewedPointSchedulingPolicy;
 import com.javareview.settings.SettingsService;
 import com.javareview.settings.UserSettings;
 import com.javareview.today.TodayDtos.TodayPlanResponse;
@@ -85,6 +86,18 @@ class TodayPlanServiceTests {
 	}
 
 	@Test
+	void getPlanReturnsRequestedDateWithoutGeneratingPlan() {
+		LocalDate requestedDate = TODAY.minusDays(2);
+		when(reviewTaskRepository.findPlan(user.getId(), requestedDate)).thenReturn(List.of());
+
+		TodayPlanResponse response = todayPlanService.getPlan(user, requestedDate);
+
+		assertThat(response.date()).isEqualTo(requestedDate);
+		verify(reviewTaskRepository).findPlan(user.getId(), requestedDate);
+		verifyNoInteractions(reviewPointRepository);
+	}
+
+	@Test
 	void unfinishedTasksAreCarriedOverBeforeDueTasks() {
 		ReviewPoint carryPoint = point("事务代理生效边界", 5, 5, 5);
 		ReviewPoint duePoint = duePoint("传播行为与嵌套调用", 5, 4, 5, TODAY.minusDays(1));
@@ -110,6 +123,48 @@ class TodayPlanServiceTests {
 		assertThat(response.groups().get(0).tasks().get(0).pointTitle()).isEqualTo("事务代理生效边界");
 		assertThat(response.groups().get(1).tasks()).hasSize(1);
 		assertThat(response.scheduledMinutes()).isEqualTo(20);
+	}
+
+	@Test
+	void dueTasksReceiveReservedCapacityWhenCarryOverExceedsPlan() {
+		UserSettings settings = new UserSettings(user);
+		settings.update(
+				"default",
+				List.of(),
+				30,
+				50);
+		when(settingsService.findOrDefault(user)).thenReturn(settings);
+		List<ReviewTask> carryOverTasks = new ArrayList<>();
+		for (int index = 0; index < 6; index++) {
+			carryOverTasks.add(new ReviewTask(
+					user,
+					point("顺延点 " + index, 5, 5, 5),
+					TODAY.minusDays(1),
+					ReviewTaskType.DUE,
+					BigDecimal.TEN,
+					10));
+		}
+		List<ReviewPoint> duePoints = new ArrayList<>();
+		for (int index = 0; index < 3; index++) {
+			duePoints.add(duePoint("到期点 " + index, 5, 5, 5, TODAY.minusDays(index + 1L)));
+		}
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.findCarryOverCandidates(eq(user.getId()), eq(TODAY), anyCollection()))
+				.thenReturn(carryOverTasks);
+		when(reviewPointRepository.findDueCandidates(eq(user.getId()), eq(TODAY), any()))
+				.thenReturn(duePoints);
+		when(reviewTaskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		TodayPlanResponse response = todayPlanService.generateToday(user);
+
+		assertThat(response.scheduledMinutes()).isEqualTo(50);
+		assertThat(response.remainingMinutes()).isZero();
+		assertThat(response.groups().get(0).tasks())
+				.extracting(task -> task.planReason())
+				.containsExactly("顺延未完成", "顺延未完成", "顺延未完成");
+		assertThat(response.groups().get(1).tasks())
+				.extracting(task -> task.planReason())
+				.containsExactly("逾期复验", "逾期复验");
 	}
 
 	@Test
@@ -176,6 +231,100 @@ class TodayPlanServiceTests {
 		assertThat(response.groups().get(0).tasks())
 				.extracting(task -> task.pointTitle())
 				.containsExactly("事务代理生效边界");
+	}
+
+	@Test
+	void reviewedPointSchedulingPolicyCanKeepReviewedDuePointsOutsideScope() {
+		UserSettings settings = new UserSettings(user);
+		settings.update(
+				"default",
+				List.of(),
+				30,
+				60,
+				ReviewedPointSchedulingPolicy.KEEP_REVIEWED);
+		when(settingsService.findOrDefault(user)).thenReturn(settings);
+		ReviewPoint outsideScopeReviewedPoint = duePoint(
+				unselectedTopic(),
+				"范围外已复习点",
+				5,
+				5,
+				5,
+				TODAY.minusDays(1),
+				1);
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.findCarryOverCandidatesIncludingReviewedOutsideScope(
+				eq(user.getId()),
+				eq(TODAY),
+				anyCollection()))
+				.thenReturn(List.of());
+		when(reviewPointRepository.findDueCandidatesIncludingReviewedOutsideScope(eq(user.getId()), eq(TODAY), any()))
+				.thenReturn(List.of(outsideScopeReviewedPoint));
+		when(reviewPointRepository.findNewExpansionCandidates(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		TodayPlanResponse response = todayPlanService.generateToday(user);
+
+		assertThat(response.groups().get(1).tasks())
+				.extracting(task -> task.pointTitle())
+				.containsExactly("范围外已复习点");
+	}
+
+	@Test
+	void unreviewedCarryOverPointsOutsideScopeRemainExcludedWhenReviewedPointsAreKept() {
+		UserSettings settings = new UserSettings(user);
+		settings.update(
+				"default",
+				List.of(),
+				30,
+				60,
+				ReviewedPointSchedulingPolicy.KEEP_REVIEWED);
+		when(settingsService.findOrDefault(user)).thenReturn(settings);
+		ReviewPoint reviewedPoint = duePoint(
+				unselectedTopic(),
+				"范围外已复习顺延点",
+				5,
+				5,
+				5,
+				TODAY.minusDays(2),
+				1);
+		ReviewPoint unreviewedPoint = duePoint(
+				unselectedTopic(),
+				"范围外未复习顺延点",
+				5,
+				5,
+				5,
+				TODAY.minusDays(2),
+				0);
+		ReviewTask reviewedOldTask = new ReviewTask(
+				user,
+				reviewedPoint,
+				TODAY.minusDays(1),
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		ReviewTask unreviewedOldTask = new ReviewTask(
+				user,
+				unreviewedPoint,
+				TODAY.minusDays(1),
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		when(reviewTaskRepository.findPlan(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.findCarryOverCandidatesIncludingReviewedOutsideScope(
+				eq(user.getId()),
+				eq(TODAY),
+				anyCollection()))
+				.thenReturn(List.of(unreviewedOldTask, reviewedOldTask));
+		when(reviewPointRepository.findDueCandidatesIncludingReviewedOutsideScope(eq(user.getId()), eq(TODAY), any()))
+				.thenReturn(List.of());
+		when(reviewPointRepository.findNewExpansionCandidates(user.getId(), TODAY)).thenReturn(List.of());
+		when(reviewTaskRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+		TodayPlanResponse response = todayPlanService.generateToday(user);
+
+		assertThat(response.groups().get(0).tasks())
+				.extracting(task -> task.pointTitle())
+				.containsExactly("范围外已复习顺延点");
 	}
 
 	@Test
@@ -393,17 +542,52 @@ class TodayPlanServiceTests {
 				"next probe");
 	}
 
+	private ReviewPoint point(
+			Topic topic,
+			String title,
+			int importance,
+			int difficulty,
+			int frequency) {
+		return new ReviewPoint(
+				topic,
+				title,
+				importance,
+				difficulty,
+				frequency,
+				"next probe");
+	}
+
 	private ReviewPoint duePoint(String title, int importance, int difficulty, int frequency, LocalDate dueDate) {
-		ReviewPoint point = point(title, importance, difficulty, frequency);
+		return duePoint(topic, title, importance, difficulty, frequency, dueDate, 1);
+	}
+
+	private ReviewPoint duePoint(
+			Topic topic,
+			String title,
+			int importance,
+			int difficulty,
+			int frequency,
+			LocalDate dueDate,
+			int reviewCount) {
+		ReviewPoint point = point(topic, title, importance, difficulty, frequency);
 		point.updateReviewProgress(
 				BigDecimal.ONE,
 				ReviewPointStatus.DUE,
 				Instant.parse("2026-05-20T00:00:00Z"),
 				dueDate.atStartOfDay().toInstant(ZoneOffset.UTC),
-				1,
+				reviewCount,
 				0,
 				List.of(),
 				"next probe");
 		return point;
+	}
+
+	private Topic unselectedTopic() {
+		return new Topic(
+				new Domain(java.util.UUID.randomUUID(), "redis", "Redis", 50),
+				"redis-cache-consistency-" + java.util.UUID.randomUUID(),
+				"缓存一致性",
+				TopicSource.BUILTIN,
+				false);
 	}
 }

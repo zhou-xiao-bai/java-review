@@ -57,6 +57,7 @@ public final class TodayDtos {
 			LocalDate date,
 			String type,
 			String typeLabel,
+			String planReason,
 			String status,
 			String statusLabel,
 			BigDecimal priorityScore,

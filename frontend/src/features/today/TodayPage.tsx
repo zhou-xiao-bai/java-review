@@ -34,22 +34,25 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-const todayQueryKey = ['today'] as const
 const estimateOptions = [5, 10, 15, 20, 30]
 
 export function TodayPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const currentUserQuery = useCurrentUser()
+  const currentDate = localDateString()
+  const [viewDate, setViewDate] = useState(() => currentDate)
   const [manualPrompt, setManualPrompt] = useState('')
   const [manualMinutes, setManualMinutes] = useState(10)
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set(),
   )
+  const isTodayView = viewDate === currentDate
+  const planQueryKey = useMemo(() => todayQueryKey(viewDate), [viewDate])
 
   const todayQuery = useQuery({
-    queryKey: todayQueryKey,
-    queryFn: getToday,
+    queryKey: planQueryKey,
+    queryFn: () => getToday(viewDate),
   })
 
   const generateMutation = useMutation({
@@ -71,21 +74,21 @@ export function TodayPage() {
     onSuccess: async () => {
       setManualPrompt('')
       setManualMinutes(10)
-      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+      await queryClient.invalidateQueries({ queryKey: todayQueryKey(currentDate) })
     },
   })
 
   const skipMutation = useMutation({
     mutationFn: skipReviewTask,
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+      await queryClient.invalidateQueries({ queryKey: ['today'] })
     },
   })
 
   const unskipMutation = useMutation({
     mutationFn: unskipReviewTask,
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+      await queryClient.invalidateQueries({ queryKey: ['today'] })
     },
   })
 
@@ -142,7 +145,7 @@ export function TodayPage() {
     (todayQuery.isError ? getApiErrorMessage(todayQuery.error) : '')
 
   function applyTodayPlan(nextPlan: TodayPlan) {
-    queryClient.setQueryData(todayQueryKey, nextPlan)
+    queryClient.setQueryData(todayQueryKey(nextPlan.date), nextPlan)
     const visibleIds = new Set(taskIds(nextPlan))
     setSelectedTaskIds((current) => {
       const next = new Set([...current].filter((id) => visibleIds.has(id)))
@@ -152,10 +155,21 @@ export function TodayPage() {
 
   function handleManualSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!isTodayView) {
+      return
+    }
     manualMutation.mutate({
       prompt: manualPrompt,
       estimatedMinutes: manualMinutes,
     })
+  }
+
+  function handleViewDateChange(nextDate: string) {
+    if (!nextDate) {
+      return
+    }
+    setViewDate(nextDate)
+    setSelectedTaskIds(new Set())
   }
 
   function toggleAllTasks() {
@@ -203,7 +217,7 @@ export function TodayPage() {
         <div>
           <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
             <CalendarDays className="size-4 text-emerald-700" aria-hidden="true" />
-            <span>{formatPlanDate(plan?.date)}</span>
+            <span>{formatPlanDate(plan?.date ?? viewDate)}</span>
             {currentUserQuery.data ? (
               <span className="text-slate-300">/</span>
             ) : null}
@@ -212,55 +226,90 @@ export function TodayPage() {
             ) : null}
           </div>
           <h1 className="mt-2 text-3xl font-semibold text-slate-950">
-            今日复习
+            复习计划
           </h1>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={generateMutation.isPending || regenerateMutation.isPending}
-            onClick={() => generateMutation.mutate()}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {generateMutation.isPending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <RefreshCw className="size-4" aria-hidden="true" />
-            )}
-            补齐今日计划
-          </button>
-          <button
-            type="button"
-            disabled={generateMutation.isPending || regenerateMutation.isPending}
-            onClick={() => regenerateMutation.mutate()}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {regenerateMutation.isPending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <RefreshCw className="size-4" aria-hidden="true" />
-            )}
-            重排待开始任务
-          </button>
-          <button
-            type="button"
-            disabled={pendingTaskCount === 0}
-            onClick={() => navigate('/review/session')}
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Play className="size-4" aria-hidden="true" />
-            手动选择
-          </button>
-          <button
-            type="button"
-            disabled={pendingTaskCount === 0}
-            onClick={() => navigate('/review/session?mode=immersive')}
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-700 px-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Play className="size-4" aria-hidden="true" />
-            沉浸式复习
-          </button>
+        <div className="flex flex-col gap-2 xl:items-end">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm">
+              <CalendarDays className="size-4 text-slate-400" aria-hidden="true" />
+              <input
+                type="date"
+                value={viewDate}
+                onChange={(event) => handleViewDateChange(event.target.value)}
+                className="bg-transparent text-sm outline-none"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => handleViewDateChange(currentDate)}
+              disabled={isTodayView}
+              className="inline-flex h-10 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              今天
+            </button>
+            {!isTodayView ? (
+              <span className="inline-flex h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-500">
+                只读视图
+              </span>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap gap-2 xl:justify-end">
+            <button
+              type="button"
+              disabled={
+                !isTodayView ||
+                generateMutation.isPending ||
+                regenerateMutation.isPending
+              }
+              onClick={() => generateMutation.mutate()}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {generateMutation.isPending ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="size-4" aria-hidden="true" />
+              )}
+              补齐今日计划
+            </button>
+            <button
+              type="button"
+              disabled={
+                !isTodayView ||
+                generateMutation.isPending ||
+                regenerateMutation.isPending
+              }
+              onClick={() => regenerateMutation.mutate()}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {regenerateMutation.isPending ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="size-4" aria-hidden="true" />
+              )}
+              重排待开始任务
+            </button>
+            <button
+              type="button"
+              disabled={!isTodayView || pendingTaskCount === 0}
+              onClick={() => navigate('/review/session')}
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Play className="size-4" aria-hidden="true" />
+              手动选择
+            </button>
+            <button
+              type="button"
+              disabled={!isTodayView || pendingTaskCount === 0}
+              onClick={() => navigate('/review/session?mode=immersive')}
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-700 px-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Play className="size-4" aria-hidden="true" />
+              沉浸式复习
+            </button>
+          </div>
         </div>
       </div>
 
@@ -277,20 +326,28 @@ export function TodayPage() {
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <SummaryCard
-              label="顺延未完成"
+              label={isTodayView ? '顺延未完成' : '当日顺延'}
               metric={plan?.summary.carryOver}
               tone="amber"
             />
-            <SummaryCard label="今日到期" metric={plan?.summary.due} tone="rose" />
+            <SummaryCard
+              label={isTodayView ? '今日到期' : '当日到期'}
+              metric={plan?.summary.due}
+              tone="rose"
+            />
             <SummaryCard
               label="新拓展"
               metric={plan?.summary.newExpansion}
               tone="emerald"
             />
-            <SummaryCard label="今日加练" metric={plan?.summary.manual} tone="slate" />
+            <SummaryCard
+              label={isTodayView ? '今日加练' : '当日加练'}
+              metric={plan?.summary.manual}
+              tone="slate"
+            />
           </div>
 
-          {taskCount > 0 ? (
+          {taskCount > 0 && isTodayView ? (
             <SelectionToolbar
               allSelected={allSelected}
               pending={batchRemoveMutation.isPending}
@@ -308,7 +365,9 @@ export function TodayPage() {
             </div>
           ) : taskCount === 0 ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
-              暂无今日计划。请先在范围管理选择复习范围，再补齐今日计划，或追加一条今日加练。
+              {isTodayView
+                ? '暂无今日计划。请先在范围管理选择复习范围，再补齐今日计划，或追加一条今日加练。'
+                : '该日期暂无复习计划。'}
             </div>
           ) : (
             plan?.groups.map((group) => (
@@ -324,6 +383,7 @@ export function TodayPage() {
                 removePending={removeMutation.isPending}
                 batchRemovingTaskIds={batchRemoveMutation.variables ?? []}
                 batchRemovePending={batchRemoveMutation.isPending}
+                readOnly={!isTodayView}
                 onSkip={(task) => skipMutation.mutate(task.id)}
                 onUnskip={(task) => unskipMutation.mutate(task.id)}
                 onToggleGroup={() => toggleGroup(group)}
@@ -335,53 +395,67 @@ export function TodayPage() {
         </div>
 
         <aside className="h-fit rounded-lg border border-slate-200 bg-white p-5 shadow-sm lg:sticky lg:top-24">
-          <div className="flex items-center gap-2">
-            <Plus className="size-4 text-emerald-700" aria-hidden="true" />
-            <h2 className="text-sm font-semibold text-slate-950">追加今日加练</h2>
-          </div>
+          {isTodayView ? (
+            <>
+              <div className="flex items-center gap-2">
+                <Plus className="size-4 text-emerald-700" aria-hidden="true" />
+                <h2 className="text-sm font-semibold text-slate-950">追加今日加练</h2>
+              </div>
 
-          <form className="mt-4 space-y-3" onSubmit={handleManualSubmit}>
-            <textarea
-              required
-              rows={5}
-              maxLength={1000}
-              value={manualPrompt}
-              onChange={(event) => setManualPrompt(event.target.value)}
-              className="w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-slate-500"
-              placeholder="例如：手写 AQS acquire 流程并说明中断处理边界"
-            />
+              <form className="mt-4 space-y-3" onSubmit={handleManualSubmit}>
+                <textarea
+                  required
+                  rows={5}
+                  maxLength={1000}
+                  value={manualPrompt}
+                  onChange={(event) => setManualPrompt(event.target.value)}
+                  className="w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-slate-500"
+                  placeholder="例如：手写 AQS acquire 流程并说明中断处理边界"
+                />
 
-            <div className="grid grid-cols-[1fr_112px] gap-3">
-              <label className="flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-600">
-                <Clock className="size-4 text-slate-400" aria-hidden="true" />
-                预计时长
-              </label>
-              <select
-                value={manualMinutes}
-                onChange={(event) => setManualMinutes(Number(event.target.value))}
-                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
-              >
-                {estimateOptions.map((minutes) => (
-                  <option key={minutes} value={minutes}>
-                    {minutes} 分钟
-                  </option>
-                ))}
-              </select>
-            </div>
+                <div className="grid grid-cols-[1fr_112px] gap-3">
+                  <label className="flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-600">
+                    <Clock className="size-4 text-slate-400" aria-hidden="true" />
+                    预计时长
+                  </label>
+                  <select
+                    value={manualMinutes}
+                    onChange={(event) => setManualMinutes(Number(event.target.value))}
+                    className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
+                  >
+                    {estimateOptions.map((minutes) => (
+                      <option key={minutes} value={minutes}>
+                        {minutes} 分钟
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-            <button
-              type="submit"
-              disabled={manualMutation.isPending}
-              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {manualMutation.isPending ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <Plus className="size-4" aria-hidden="true" />
-              )}
-              添加加练
-            </button>
-          </form>
+                <button
+                  type="submit"
+                  disabled={manualMutation.isPending}
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {manualMutation.isPending ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Plus className="size-4" aria-hidden="true" />
+                  )}
+                  添加加练
+                </button>
+              </form>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <CalendarDays className="size-4 text-slate-500" aria-hidden="true" />
+                <h2 className="text-sm font-semibold text-slate-950">日期视图</h2>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-500">
+                当前日期只展示已生成的计划，不会补齐、重排或追加加练。
+              </p>
+            </>
+          )}
         </aside>
       </div>
     </section>
@@ -548,6 +622,7 @@ function TaskGroupPanel({
   selectedTaskIds,
   skipPending,
   skippingTaskId,
+  readOnly,
   unskipPending,
   unskippingTaskId,
 }: {
@@ -561,6 +636,7 @@ function TaskGroupPanel({
   onUnskip: (task: ReviewTask) => void
   removePending: boolean
   removingTaskId: string | undefined
+  readOnly: boolean
   selectedTaskIds: Set<string>
   skipPending: boolean
   skippingTaskId: string | undefined
@@ -582,12 +658,14 @@ function TaskGroupPanel({
             type="button"
             title={groupSelected ? '取消选择本组' : '选择本组'}
             aria-label={groupSelected ? '取消选择本组' : '选择本组'}
+            disabled={readOnly}
             onClick={onToggleGroup}
             className={cn(
               'inline-flex size-8 shrink-0 items-center justify-center rounded-md border text-slate-500 hover:bg-slate-50 hover:text-slate-900',
               groupSelected || groupIndeterminate
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                 : 'border-slate-200 bg-white',
+              readOnly && 'cursor-not-allowed opacity-40',
             )}
           >
             {groupSelected || groupIndeterminate ? (
@@ -617,6 +695,7 @@ function TaskGroupPanel({
               (removePending && removingTaskId === task.id) ||
               (batchRemovePending && batchRemovingTaskIds.includes(task.id))
             }
+            readOnly={readOnly}
             onRemove={() => onRemove(task)}
             onSkip={() => onSkip(task)}
             onToggle={() => onToggleTask(task)}
@@ -633,6 +712,7 @@ function TaskRow({
   onSkip,
   onToggle,
   onUnskip,
+  readOnly,
   removePending,
   selected,
   skipPending,
@@ -643,19 +723,20 @@ function TaskRow({
   onSkip: () => void
   onToggle: () => void
   onUnskip: () => void
+  readOnly: boolean
   removePending: boolean
   selected: boolean
   skipPending: boolean
   unskipPending: boolean
   task: ReviewTask
 }) {
-  const canSkip = ['pending', 'in_progress'].includes(task.status)
+  const canSkip = !readOnly && ['pending', 'in_progress'].includes(task.status)
   const canUnskip = task.status === 'skipped'
   const actionPending = skipPending || unskipPending || removePending
   return (
     <div
       className={cn(
-        'grid gap-3 px-4 py-3 lg:grid-cols-[32px_minmax(0,1fr)_170px_120px_92px]',
+        'grid gap-3 px-4 py-3 lg:grid-cols-[32px_minmax(0,1fr)_220px_120px_92px]',
         selected && 'bg-emerald-50/50',
       )}
     >
@@ -664,12 +745,14 @@ function TaskRow({
           type="button"
           title={selected ? '取消选择' : '选择任务'}
           aria-label={selected ? '取消选择' : '选择任务'}
+          disabled={readOnly}
           onClick={onToggle}
           className={cn(
             'inline-flex size-8 items-center justify-center rounded-md border text-slate-500 hover:bg-slate-50 hover:text-slate-900',
             selected
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : 'border-slate-200 bg-white',
+            readOnly && 'cursor-not-allowed opacity-40',
           )}
         >
           {selected ? (
@@ -697,6 +780,7 @@ function TaskRow({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        <PlanReasonTag task={task} />
         <StatusTag status={task.status} label={task.statusLabel} />
         <PriorityTag score={task.priorityScore} />
         <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
@@ -715,7 +799,7 @@ function TaskRow({
             type="button"
             title="取消跳过"
             aria-label="取消跳过"
-            disabled={actionPending}
+            disabled={readOnly || actionPending}
             onClick={onUnskip}
             className="inline-flex size-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -742,10 +826,10 @@ function TaskRow({
           </button>
         )}
         <button
-          type="button"
-          title="移出今日计划"
-          aria-label="移出今日计划"
-          disabled={actionPending}
+            type="button"
+            title="移出今日计划"
+            aria-label="移出今日计划"
+          disabled={readOnly || actionPending}
           onClick={onRemove}
           className="inline-flex size-9 items-center justify-center rounded-md border border-rose-200 bg-white text-rose-500 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -757,6 +841,22 @@ function TaskRow({
         </button>
       </div>
     </div>
+  )
+}
+
+function PlanReasonTag({ task }: { task: ReviewTask }) {
+  return (
+    <span
+      className={cn(
+        'rounded px-2 py-1 text-xs font-medium',
+        task.type === 'carry_over' && 'bg-amber-50 text-amber-700',
+        task.type === 'due' && 'bg-rose-50 text-rose-700',
+        task.type === 'new' && 'bg-emerald-50 text-emerald-700',
+        task.type === 'manual' && 'bg-slate-100 text-slate-600',
+      )}
+    >
+      {task.planReason}
+    </span>
   )
 }
 
@@ -803,6 +903,15 @@ function formatPlanDate(value: string | undefined) {
     day: '2-digit',
     weekday: 'short',
   }).format(new Date(`${value}T00:00:00`))
+}
+
+function localDateString(date = new Date()) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return localDate.toISOString().slice(0, 10)
+}
+
+function todayQueryKey(date: string) {
+  return ['today', date] as const
 }
 
 function percent(value: number, capacity: number) {

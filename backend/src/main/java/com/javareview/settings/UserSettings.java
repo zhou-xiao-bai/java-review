@@ -58,6 +58,9 @@ public class UserSettings {
 	@Column(name = "daily_review_minutes", nullable = false)
 	private int dailyReviewMinutes = 60;
 
+	@Column(name = "reviewed_point_scheduling_policy", nullable = false, length = 32)
+	private String reviewedPointSchedulingPolicy = ReviewedPointSchedulingPolicy.FOLLOW_SCOPE.apiValue();
+
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private Instant createdAt;
 
@@ -119,11 +122,29 @@ public class UserSettings {
 		return dailyReviewMinutes;
 	}
 
+	public ReviewedPointSchedulingPolicy getReviewedPointSchedulingPolicy() {
+		return ReviewedPointSchedulingPolicy.fromApiValue(reviewedPointSchedulingPolicy);
+	}
+
 	public void update(
 			String activeLlmConfigId,
 			List<LlmConfig> llmConfigs,
 			int requestTimeoutSeconds,
 			int dailyReviewMinutes) {
+		update(
+				activeLlmConfigId,
+				llmConfigs,
+				requestTimeoutSeconds,
+				dailyReviewMinutes,
+				ReviewedPointSchedulingPolicy.FOLLOW_SCOPE);
+	}
+
+	public void update(
+			String activeLlmConfigId,
+			List<LlmConfig> llmConfigs,
+			int requestTimeoutSeconds,
+			int dailyReviewMinutes,
+			ReviewedPointSchedulingPolicy reviewedPointSchedulingPolicy) {
 		this.llmConfigs = new ArrayList<>(llmConfigs);
 		this.activeLlmConfigId = activeLlmConfigId;
 		LlmConfig active = activeConfig();
@@ -133,6 +154,7 @@ public class UserSettings {
 		this.llmModel = active.model();
 		this.requestTimeoutSeconds = requestTimeoutSeconds;
 		this.dailyReviewMinutes = dailyReviewMinutes;
+		this.reviewedPointSchedulingPolicy = reviewedPointSchedulingPolicy.apiValue();
 	}
 
 	private LlmConfig activeConfig() {

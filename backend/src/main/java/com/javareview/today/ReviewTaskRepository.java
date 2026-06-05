@@ -60,6 +60,21 @@ public interface ReviewTaskRepository extends JpaRepository<ReviewTask, UUID> {
 			left join fetch point.topic topic
 			left join fetch topic.domain domain
 			where task.user.id = :userId
+			and task.taskDate between :startDate and :endDate
+			order by task.taskDate asc, task.priorityScore desc, task.createdAt asc
+			""")
+	List<ReviewTask> findPlanBetween(
+			@Param("userId") UUID userId,
+			@Param("startDate") LocalDate startDate,
+			@Param("endDate") LocalDate endDate);
+
+	@Query("""
+			select task
+			from ReviewTask task
+			left join fetch task.reviewPoint point
+			left join fetch point.topic topic
+			left join fetch topic.domain domain
+			where task.user.id = :userId
 			and task.taskDate < :today
 			and task.status in :statuses
 			and task.removedAt is null
@@ -70,6 +85,32 @@ public interface ReviewTaskRepository extends JpaRepository<ReviewTask, UUID> {
 			order by task.taskDate asc, task.priorityScore desc, task.createdAt asc
 			""")
 	List<ReviewTask> findCarryOverCandidates(
+			@Param("userId") UUID userId,
+			@Param("today") LocalDate today,
+			@Param("statuses") Collection<ReviewTaskStatus> statuses);
+
+	@Query("""
+			select task
+			from ReviewTask task
+			left join fetch task.reviewPoint point
+			left join fetch point.topic topic
+			left join fetch topic.domain domain
+			where task.user.id = :userId
+			and task.taskDate < :today
+			and task.status in :statuses
+			and task.removedAt is null
+			and task.type <> com.javareview.today.ReviewTaskType.MANUAL
+			and (
+				point.reviewCount > 0
+				or (
+					topic.selected = true
+					and topic.planEnabled = true
+					and topic.relevanceTier in (com.javareview.topic.RelevanceTier.CORE, com.javareview.topic.RelevanceTier.PROJECT)
+				)
+			)
+			order by task.taskDate asc, task.priorityScore desc, task.createdAt asc
+			""")
+	List<ReviewTask> findCarryOverCandidatesIncludingReviewedOutsideScope(
 			@Param("userId") UUID userId,
 			@Param("today") LocalDate today,
 			@Param("statuses") Collection<ReviewTaskStatus> statuses);

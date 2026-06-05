@@ -4,14 +4,18 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +25,9 @@ import com.javareview.progress.ProgressDtos.DomainProgressResponse;
 import com.javareview.progress.ProgressDtos.DueReviewPointResponse;
 import com.javareview.progress.ProgressDtos.ProgressOverviewResponse;
 import com.javareview.progress.ProgressDtos.RecentSessionResponse;
+import com.javareview.progress.ProgressDtos.ReviewPlanCalendarResponse;
+import com.javareview.progress.ProgressDtos.ReviewPlanDayResponse;
+import com.javareview.progress.ProgressDtos.ReviewPlanItemResponse;
 import com.javareview.progress.ProgressDtos.TopicProgressResponse;
 import com.javareview.progress.ProgressDtos.WeakPointResponse;
 import com.javareview.reviewpoint.ReviewPoint;
@@ -32,6 +39,12 @@ import com.javareview.reviewpoint.WeaknessEventStatus;
 import com.javareview.reviewsession.ReviewSession;
 import com.javareview.reviewsession.ReviewSessionRepository;
 import com.javareview.reviewsession.ReviewSessionStatus;
+import com.javareview.settings.ReviewedPointSchedulingPolicy;
+import com.javareview.settings.SettingsService;
+import com.javareview.settings.UserSettings;
+import com.javareview.today.ReviewTask;
+import com.javareview.today.ReviewTaskRepository;
+import com.javareview.today.ReviewTaskType;
 import com.javareview.topic.Topic;
 import com.javareview.topic.TopicRepository;
 
@@ -44,6 +57,8 @@ public class ProgressService {
 	private final ReviewPointRepository reviewPointRepository;
 	private final ReviewWeaknessEventRepository weaknessEventRepository;
 	private final ReviewSessionRepository reviewSessionRepository;
+	private final ReviewTaskRepository reviewTaskRepository;
+	private final SettingsService settingsService;
 	private final Clock clock;
 
 	public ProgressService(
@@ -51,11 +66,15 @@ public class ProgressService {
 			ReviewPointRepository reviewPointRepository,
 			ReviewWeaknessEventRepository weaknessEventRepository,
 			ReviewSessionRepository reviewSessionRepository,
+			ReviewTaskRepository reviewTaskRepository,
+			SettingsService settingsService,
 			Clock clock) {
 		this.topicRepository = topicRepository;
 		this.reviewPointRepository = reviewPointRepository;
 		this.weaknessEventRepository = weaknessEventRepository;
 		this.reviewSessionRepository = reviewSessionRepository;
+		this.reviewTaskRepository = reviewTaskRepository;
+		this.settingsService = settingsService;
 		this.clock = clock;
 	}
 
@@ -186,6 +205,59 @@ public class ProgressService {
 				.toList();
 	}
 
+	@Transactional(readOnly = true)
+	public ReviewPlanCalendarResponse reviewPlanCalendar(User user, LocalDate startDate, int days) {
+		LocalDate start = startDate == null ? LocalDate.now(clock) : startDate;
+		int normalizedDays = Math.max(1, Math.min(30, days));
+		LocalDate end = start.plusDays(normalizedDays - 1L);
+		Map<LocalDate, List<ReviewPlanItemResponse>> itemsByDate = new HashMap<>();
+
+		List<ReviewTask> generatedTasks = reviewTaskRepository.findPlanBetween(user.getId(), start, end).stream()
+				.filter(task -> !task.isRemoved())
+				.toList();
+		Set<UUID> generatedPointIds = generatedTasks.stream()
+				.map(ReviewTask::getReviewPoint)
+				.filter(point -> point != null)
+				.map(ReviewPoint::getId)
+				.collect(Collectors.toSet());
+		for (ReviewTask task : generatedTasks) {
+			itemsByDate.computeIfAbsent(task.getTaskDate(), ignored -> new java.util.ArrayList<>())
+					.add(planItem(task));
+		}
+
+		UserSettings settings = settingsService.findOrDefault(user);
+		List<ReviewPoint> duePoints = settings.getReviewedPointSchedulingPolicy() == ReviewedPointSchedulingPolicy.KEEP_REVIEWED
+				? reviewPointRepository.findReviewPlanCalendarPointsIncludingReviewedOutsideScope(endOfDay(end))
+				: reviewPointRepository.findReviewPlanCalendarPoints(endOfDay(end));
+		for (ReviewPoint point : duePoints) {
+			if (generatedPointIds.contains(point.getId())) {
+				continue;
+			}
+			LocalDate dueDate = point.getNextReviewAt().atZone(clock.getZone()).toLocalDate();
+			LocalDate planDate = dueDate.isBefore(start) ? start : dueDate;
+			if (planDate.isAfter(end)) {
+				continue;
+			}
+			itemsByDate.computeIfAbsent(planDate, ignored -> new java.util.ArrayList<>())
+					.add(planItem(point, planDate));
+		}
+
+		List<ReviewPlanDayResponse> dayResponses = IntStream.range(0, normalizedDays)
+				.mapToObj(offset -> {
+					LocalDate date = start.plusDays(offset);
+					List<ReviewPlanItemResponse> items = itemsByDate.getOrDefault(date, List.of()).stream()
+							.sorted(planItemComparator())
+							.toList();
+					return new ReviewPlanDayResponse(
+							date,
+							items.size(),
+							items.stream().mapToInt(ReviewPlanItemResponse::estimatedMinutes).sum(),
+							items);
+				})
+				.toList();
+		return new ReviewPlanCalendarResponse(start, end, dayResponses);
+	}
+
 	private ProgressData loadData() {
 		List<Topic> topics = topicRepository.findAllWithDomain().stream()
 				.filter(Topic::isSelected)
@@ -312,6 +384,95 @@ public class ProgressService {
 			return "到期复验";
 		}
 		return "需要复验";
+	}
+
+	private ReviewPlanItemResponse planItem(ReviewTask task) {
+		ReviewPoint point = task.getReviewPoint();
+		return new ReviewPlanItemResponse(
+				task.getId(),
+				point == null ? null : point.getId(),
+				"generated_task",
+				task.getType().apiValue(),
+				task.getType().label(),
+				planReason(task.getTaskDate(), task.getType(), point),
+				task.getStatus().apiValue(),
+				task.getStatus().label(),
+				point == null ? null : point.getTopic().getDomain().getName(),
+				point == null ? null : point.getTopic().getTitle(),
+				point == null ? null : point.getTitle(),
+				task.getManualPrompt(),
+				task.getEstimatedMinutes(),
+				point == null ? null : point.getNextReviewAt(),
+				dueStatus(task.getTaskDate(), task.getType(), point));
+	}
+
+	private ReviewPlanItemResponse planItem(ReviewPoint point, LocalDate planDate) {
+		return new ReviewPlanItemResponse(
+				null,
+				point.getId(),
+				"due_point",
+				"due",
+				"预计到期",
+				planReason(planDate, ReviewTaskType.DUE, point),
+				"pending",
+				"待生成",
+				point.getTopic().getDomain().getName(),
+				point.getTopic().getTitle(),
+				point.getTitle(),
+				null,
+				10,
+				point.getNextReviewAt(),
+				dueStatus(planDate, ReviewTaskType.DUE, point));
+	}
+
+	private String planReason(LocalDate planDate, ReviewTaskType type, ReviewPoint point) {
+		return switch (type) {
+			case CARRY_OVER -> "顺延未完成";
+			case DUE -> overdueDays(planDate, point) > 0 ? "逾期复验" : "到期复验";
+			case NEW -> "范围新拓展";
+			case MANUAL -> "今日加练";
+		};
+	}
+
+	private String dueStatus(LocalDate planDate, ReviewTaskType type, ReviewPoint point) {
+		if (type == ReviewTaskType.CARRY_OVER) {
+			return "顺延";
+		}
+		if (type == ReviewTaskType.NEW) {
+			return "新拓展";
+		}
+		if (type == ReviewTaskType.MANUAL) {
+			return "加练";
+		}
+		if (point == null || point.getNextReviewAt() == null) {
+			return "未排期";
+		}
+		long days = overdueDays(planDate, point);
+		if (days > 0) {
+			return "逾期 " + days + " 天";
+		}
+		return "当日到期";
+	}
+
+	private long overdueDays(LocalDate planDate, ReviewPoint point) {
+		if (point == null || point.getNextReviewAt() == null) {
+			return 0;
+		}
+		LocalDate dueDate = point.getNextReviewAt().atZone(clock.getZone()).toLocalDate();
+		return java.time.temporal.ChronoUnit.DAYS.between(dueDate, planDate);
+	}
+
+	private Instant endOfDay(LocalDate date) {
+		return date.atTime(LocalTime.MAX).atZone(clock.getZone()).toInstant();
+	}
+
+	private static Comparator<ReviewPlanItemResponse> planItemComparator() {
+		return Comparator
+				.comparingInt((ReviewPlanItemResponse item) -> item.source().equals("generated_task") ? 0 : 1)
+				.thenComparingInt(item -> item.type().equals("carry_over") ? 0 : item.type().equals("due") ? 1 : 2)
+				.thenComparing(item -> item.nextReviewAt() == null ? Instant.MAX : item.nextReviewAt())
+				.thenComparing(item -> item.topicTitle() == null ? "" : item.topicTitle())
+				.thenComparing(item -> item.pointTitle() == null ? "" : item.pointTitle());
 	}
 
 	private record ProgressData(List<Topic> topics, List<ReviewPoint> points, List<ReviewWeaknessEvent> events) {

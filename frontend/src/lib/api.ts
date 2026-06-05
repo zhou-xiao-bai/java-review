@@ -250,6 +250,7 @@ export type ReviewTask = {
   date: string
   type: 'carry_over' | 'due' | 'new' | 'manual' | string
   typeLabel: string
+  planReason: string
   status: 'pending' | 'in_progress' | 'completed' | 'skipped' | string
   statusLabel: string
   priorityScore: number
@@ -284,8 +285,11 @@ export type CreateManualTaskRequest = {
   estimatedMinutes?: number
 }
 
-export function getToday() {
-  return apiRequest<TodayPlan>('/api/today')
+export function getToday(date?: string) {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  const query = params.toString()
+  return apiRequest<TodayPlan>(`/api/today${query ? `?${query}` : ''}`)
 }
 
 export function generateToday() {
@@ -342,6 +346,7 @@ export type SettingsResponse = {
   llmConfigs: LlmConfigResponse[]
   requestTimeoutSeconds: number
   dailyReviewMinutes: number
+  reviewedPointSchedulingPolicy: ReviewedPointSchedulingPolicy
 }
 
 export type LlmConfigResponse = {
@@ -359,7 +364,13 @@ export type UpdateSettingsRequest = {
   llmConfigs: LlmConfigRequest[]
   requestTimeoutSeconds: number
   dailyReviewMinutes: number
+  reviewedPointSchedulingPolicy: ReviewedPointSchedulingPolicy
 }
+
+export type ReviewedPointSchedulingPolicy =
+  | 'follow_scope'
+  | 'keep_reviewed'
+  | string
 
 export type LlmConfigRequest = {
   id: string
@@ -399,6 +410,11 @@ export type ReviewEvaluation = {
   correctPoints: string[]
   missingPoints: string[]
   inaccuratePoints: string[]
+  corrections?: {
+    userIssue: string
+    correctAnswer: string
+    explanation: string
+  }[]
   referenceAnswer: string
   score: {
     conclusionAccuracy: number
@@ -562,6 +578,37 @@ export type RecentReviewSession = {
   endedAt: string | null
 }
 
+export type ReviewPlanCalendar = {
+  startDate: string
+  endDate: string
+  days: ReviewPlanDay[]
+}
+
+export type ReviewPlanDay = {
+  date: string
+  itemCount: number
+  estimatedMinutes: number
+  items: ReviewPlanItem[]
+}
+
+export type ReviewPlanItem = {
+  taskId: string | null
+  reviewPointId: string | null
+  source: 'generated_task' | 'due_point' | string
+  type: 'carry_over' | 'due' | 'new' | 'manual' | string
+  typeLabel: string
+  planReason: string
+  status: 'pending' | 'in_progress' | 'completed' | 'skipped' | string
+  statusLabel: string
+  domainName: string | null
+  topicTitle: string | null
+  pointTitle: string | null
+  manualPrompt: string | null
+  estimatedMinutes: number
+  nextReviewAt: string | null
+  dueStatus: string
+}
+
 export function getProgressOverview() {
   return apiRequest<ProgressOverview>('/api/progress/overview')
 }
@@ -587,6 +634,15 @@ export function getDueReviewPoints() {
 
 export function getRecentReviewSessions() {
   return apiRequest<RecentReviewSession[]>('/api/progress/recent-sessions')
+}
+
+export function getReviewPlanCalendar(startDate?: string, days = 14) {
+  const params = new URLSearchParams()
+  if (startDate) params.set('startDate', startDate)
+  params.set('days', String(days))
+  return apiRequest<ReviewPlanCalendar>(
+    `/api/progress/review-plan-calendar?${params.toString()}`,
+  )
 }
 
 export type ProjectCase = {

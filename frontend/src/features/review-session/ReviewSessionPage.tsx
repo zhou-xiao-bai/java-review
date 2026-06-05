@@ -31,7 +31,7 @@ export function ReviewSessionPage() {
   const [pendingClarifyPreview, setPendingClarifyPreview] = useState<string | null>(null)
   const autoStartedTaskIdRef = useRef<string | null>(null)
   const transcriptEndRef = useRef<HTMLDivElement | null>(null)
-  const todayQuery = useQuery({ queryKey: todayQueryKey, queryFn: getToday })
+  const todayQuery = useQuery({ queryKey: todayQueryKey, queryFn: () => getToday() })
   const tasks = useMemo(
     () => todayQuery.data?.groups.flatMap((group) => group.tasks) ?? [],
     [todayQuery.data],
@@ -341,7 +341,9 @@ export function ReviewSessionPage() {
                   {pendingTask && startMutation.isPending ? (
                     <AssistantThinking text="正在生成针对当前复习点的题目" />
                   ) : null}
-                  {session?.turns.map((turn) => <TurnCard key={turn.id} turn={turn} />)}
+                  {session?.turns
+                    .filter((turn) => turn.turnType !== 'evaluation')
+                    .map((turn) => <TurnCard key={turn.id} turn={turn} />)}
                   {pendingAnswerPreview ? (
                     <>
                       <PendingUserTurn content={pendingAnswerPreview} type="回答" />
@@ -717,11 +719,17 @@ function EvaluationPanel({
   session: ReviewSession
 }) {
   const evaluation = session.evaluation
+  const weakSignals = evaluation?.weakSignals ?? []
+  const problemItems = evaluation ? answerProblemItems(evaluation) : []
+  const corrections = compactCorrections(evaluation?.corrections ?? [])
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-        <CheckCircle2 className="size-4 text-emerald-600" />
-        收口评分
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
+          <CheckCircle2 className="size-4 text-emerald-600" />
+          收口评分
+        </div>
+        <NextTaskButton disabled={!hasNext} label={hasNext ? nextLabel : '今日队列已完成'} onClick={onNext} />
       </div>
       {evaluation ? (
         <div className="mt-4 space-y-4">
@@ -732,51 +740,51 @@ function EvaluationPanel({
             <Score label="迁移" value={evaluation.score.transferApplication} />
             <Score label="总分" value={evaluation.score.overall} strong />
           </div>
-          <TextBlock title="总体评价" value={evaluation.overallComment} />
-          <ListBlock title="正确点" values={evaluation.correctPoints} />
-          <ListBlock title="遗漏点" values={evaluation.missingPoints} />
-          <ListBlock title="不准确点" values={evaluation.inaccuratePoints} />
-          <TextBlock title="两分钟参考回答" value={evaluation.referenceAnswer} />
-          <ListBlock title="薄弱点" values={evaluation.weakPoints} />
-          {evaluation.weakSignals && evaluation.weakSignals.length > 0 ? (
-            <div>
-              <div className="text-sm font-semibold text-slate-950">薄弱证据</div>
-              <div className="mt-2 divide-y divide-slate-100 rounded-md bg-slate-50">
-                {evaluation.weakSignals.map((signal, index) => (
-                  <div key={`${signal.label}-${index}`} className="px-3 py-2 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="font-medium text-slate-900">{signal.label}</span>
-                      <span className="shrink-0 rounded bg-white px-2 py-0.5 text-xs text-slate-500">
-                        严重度 {signal.severity}
-                      </span>
-                    </div>
-                    {signal.evidence ? (
-                      <div className="mt-1 text-xs leading-5 text-slate-500">{signal.evidence}</div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
+          <div className="rounded-md bg-slate-50 px-3 py-3">
+            <div className="text-xs font-medium text-slate-500">本题判断</div>
+            <div className="mt-1 text-sm font-semibold text-slate-950">{nextStatusLabel(evaluation.nextStatus)}</div>
+            <div className="mt-2 text-sm leading-6 text-slate-700">{evaluation.overallComment}</div>
+          </div>
+          <CorrectionList corrections={corrections} />
+          <div className="grid gap-3 lg:grid-cols-2">
+            <DiagnosticList title="你答到了" values={evaluation.correctPoints} empty="这次回答没有形成明确可确认的正确点。" tone="good" />
+            <DiagnosticList title="这次回答缺口" values={problemItems} empty="没有明显缺口，后续按下次探针复验。" tone="warning" />
+          </div>
+          <WeakSignalList signals={weakSignals.slice(0, 3)} title="本次薄弱证据" compact />
           {evaluation.masteryCard ? (
             <div>
-              <div className="text-sm font-semibold text-slate-950">简略掌握卡</div>
+              <div className="text-sm font-semibold text-slate-950">复习掌握卡</div>
               <div className="mt-2 space-y-3 rounded-md bg-emerald-50 px-3 py-3 text-sm text-emerald-950">
                 <div className="font-medium">{evaluation.masteryCard.oneSentence}</div>
-                <ListBlock title="回答骨架" values={evaluation.masteryCard.answerSkeleton} />
-                <ListBlock title="必须记住" values={evaluation.masteryCard.mustRemember} />
+                <DiagnosticList title="回答骨架" values={evaluation.masteryCard.answerSkeleton} tone="plain" />
+                <DiagnosticList title="必须记住" values={evaluation.masteryCard.mustRemember} tone="plain" />
                 <TextBlock title="下次探针" value={evaluation.masteryCard.nextProbe} />
               </div>
             </div>
           ) : null}
+          <details className="rounded-md border border-slate-200 bg-white px-3 py-3">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-950">详细复盘</summary>
+            <div className="mt-3 space-y-4">
+              <ListBlock title="遗漏点" values={evaluation.missingPoints} />
+              <ListBlock title="不准确点" values={evaluation.inaccuratePoints} />
+              <ListBlock title="薄弱点" values={evaluation.weakPoints} />
+              <TextBlock title="两分钟参考回答" value={evaluation.referenceAnswer} />
+              <WeakSignalList signals={weakSignals} title="完整薄弱证据" />
+            </div>
+          </details>
         </div>
       ) : (
         <div className="mt-3 text-sm text-slate-500">本题已跳过，未更新掌握度。</div>
       )}
-      <button className="mt-5 h-10 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60" disabled={!hasNext} type="button" onClick={onNext}>
-        {hasNext ? nextLabel : '今日队列已完成'}
-      </button>
     </section>
+  )
+}
+
+function NextTaskButton({ disabled, label, onClick }: { disabled: boolean; label: string; onClick: () => void }) {
+  return (
+    <button className="h-10 w-fit rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60" disabled={disabled} type="button" onClick={onClick}>
+      {label}
+    </button>
   )
 }
 
@@ -800,6 +808,145 @@ function TextBlock({ title, value }: { title: string; value: string }) {
 
 function ListBlock({ title, values }: { title: string; values: string[] }) {
   return <TextBlock title={title} value={values.length > 0 ? values.join(' / ') : '无'} />
+}
+
+type CorrectionItem = {
+  userIssue: string
+  correctAnswer: string
+  explanation?: string | null
+}
+
+function CorrectionList({ corrections }: { corrections: CorrectionItem[] }) {
+  if (corrections.length === 0) {
+    return null
+  }
+  return (
+    <div className="rounded-md bg-amber-50 px-3 py-3 text-sm text-amber-950">
+      <div className="flex items-center gap-2 font-semibold">
+        <AlertCircle className="size-4" aria-hidden="true" />
+        针对性纠错
+      </div>
+      <div className="mt-3 divide-y divide-amber-100">
+        {corrections.map((correction, index) => (
+          <div key={`${correction.userIssue}-${index}`} className="py-3 first:pt-0 last:pb-0">
+            <div className="text-xs font-semibold text-amber-700">问题</div>
+            <div className="mt-1 leading-6">{correction.userIssue}</div>
+            <div className="mt-2 text-xs font-semibold text-emerald-700">正确说法</div>
+            <div className="mt-1 leading-6 text-slate-900">{correction.correctAnswer}</div>
+            {correction.explanation ? (
+              <div className="mt-2 leading-6 text-amber-900">{correction.explanation}</div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DiagnosticList({
+  empty = '无',
+  title,
+  tone,
+  values,
+}: {
+  empty?: string
+  title: string
+  tone: 'good' | 'warning' | 'plain'
+  values: string[]
+}) {
+  const items = compactValues(values)
+  return (
+    <div className={cn('rounded-md px-3 py-3 text-sm', tone === 'good' ? 'bg-emerald-50 text-emerald-950' : tone === 'warning' ? 'bg-amber-50 text-amber-950' : 'bg-white/60 text-emerald-950')}>
+      <div className="font-semibold">{title}</div>
+      {items.length > 0 ? (
+        <ul className="mt-2 space-y-1.5">
+          {items.map((item) => (
+            <li key={item} className="leading-6">{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <div className="mt-2 leading-6 opacity-80">{empty}</div>
+      )}
+    </div>
+  )
+}
+
+function WeakSignalList({
+  compact = false,
+  signals,
+  title,
+}: {
+  compact?: boolean
+  signals: NonNullable<ReviewSession['evaluation']>['weakSignals']
+  title: string
+}) {
+  const items = signals ?? []
+  if (items.length === 0) {
+    return null
+  }
+  return (
+    <div>
+      <div className="text-sm font-semibold text-slate-950">{title}</div>
+      <div className="mt-2 divide-y divide-slate-100 rounded-md bg-slate-50">
+        {items.map((signal, index) => (
+          <div key={`${signal.label}-${index}`} className="px-3 py-2 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-medium text-slate-900">{signal.label}</span>
+              <span className="shrink-0 rounded bg-white px-2 py-0.5 text-xs text-slate-500">
+                严重度 {signal.severity}
+              </span>
+            </div>
+            {signal.evidence ? (
+              <div className="mt-1 text-xs leading-5 text-slate-500">{compact ? truncateText(signal.evidence) : signal.evidence}</div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function answerProblemItems(evaluation: NonNullable<ReviewSession['evaluation']>) {
+  const inaccuratePoints = evaluation.inaccuratePoints.map((value) => `不准确：${value}`)
+  const directProblems = compactValues([...evaluation.missingPoints, ...inaccuratePoints])
+  return directProblems.length > 0 ? directProblems : evaluation.weakPoints
+}
+
+function compactCorrections(corrections: CorrectionItem[]) {
+  const seen = new Set<string>()
+  return corrections
+    .map((correction) => ({
+      userIssue: correction.userIssue?.trim() ?? '',
+      correctAnswer: correction.correctAnswer?.trim() ?? '',
+      explanation: correction.explanation?.trim() ?? '',
+    }))
+    .filter((correction) => correction.userIssue && correction.correctAnswer)
+    .filter((correction) => {
+      const key = `${correction.userIssue}|${correction.correctAnswer}`.toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+function compactValues(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)))
+}
+
+function truncateText(value: string, maxLength = 140) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized
+}
+
+function nextStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    due: '需要按期复验',
+    first_pass: '初步掌握，仍需复验',
+    long_term: '长期掌握',
+    stable: '掌握稳定',
+    unstable: '掌握不稳定',
+  }
+  return labels[status] ?? status
 }
 
 function isStartableTask(task: ReviewTask) {

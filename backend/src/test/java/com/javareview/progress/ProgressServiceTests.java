@@ -29,7 +29,10 @@ import com.javareview.reviewpoint.ReviewWeaknessEventRepository;
 import com.javareview.reviewsession.ReviewSession;
 import com.javareview.reviewsession.ReviewSessionRepository;
 import com.javareview.reviewsession.ReviewSessionStatus;
+import com.javareview.settings.SettingsService;
+import com.javareview.settings.UserSettings;
 import com.javareview.today.ReviewTask;
+import com.javareview.today.ReviewTaskRepository;
 import com.javareview.today.ReviewTaskType;
 import com.javareview.topic.Domain;
 import com.javareview.topic.RelevanceTier;
@@ -52,6 +55,12 @@ class ProgressServiceTests {
 	@Mock
 	private ReviewSessionRepository reviewSessionRepository;
 
+	@Mock
+	private ReviewTaskRepository reviewTaskRepository;
+
+	@Mock
+	private SettingsService settingsService;
+
 	private ProgressService progressService;
 	private User user;
 
@@ -62,6 +71,8 @@ class ProgressServiceTests {
 				reviewPointRepository,
 				weaknessEventRepository,
 				reviewSessionRepository,
+				reviewTaskRepository,
+				settingsService,
 				Clock.fixed(Instant.parse("2026-06-03T00:00:00Z"), ZoneOffset.UTC));
 		user = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
 	}
@@ -141,12 +152,63 @@ class ProgressServiceTests {
 		verify(weaknessEventRepository).findByReviewPoint_IdIn(List.of(point.getId()));
 	}
 
+	@Test
+	void reviewPlanCalendarCombinesGeneratedTasksAndFutureDuePoints() {
+		Topic topic = topic("spring-transactions", "Spring 事务");
+		ReviewPoint generatedPoint = duePoint(topic, "事务代理生效边界", LocalDate.of(2026, 6, 3));
+		ReviewPoint overduePoint = duePoint(topic, "传播行为与嵌套调用", LocalDate.of(2026, 6, 1));
+		ReviewPoint futurePoint = duePoint(topic, "事务上下文与线程绑定", LocalDate.of(2026, 6, 4));
+		ReviewTask generatedTask = new ReviewTask(
+				user,
+				generatedPoint,
+				LocalDate.of(2026, 6, 3),
+				ReviewTaskType.DUE,
+				BigDecimal.TEN,
+				10);
+		when(reviewTaskRepository.findPlanBetween(
+				user.getId(),
+				LocalDate.of(2026, 6, 3),
+				LocalDate.of(2026, 6, 5)))
+				.thenReturn(List.of(generatedTask));
+		when(settingsService.findOrDefault(user)).thenReturn(new UserSettings(user));
+		when(reviewPointRepository.findReviewPlanCalendarPoints(Instant.parse("2026-06-05T23:59:59.999999999Z")))
+				.thenReturn(List.of(generatedPoint, overduePoint, futurePoint));
+
+		var response = progressService.reviewPlanCalendar(user, LocalDate.of(2026, 6, 3), 3);
+
+		assertThat(response.days()).hasSize(3);
+		assertThat(response.days().get(0).items())
+				.extracting(item -> item.pointTitle())
+				.containsExactly("事务代理生效边界", "传播行为与嵌套调用");
+		assertThat(response.days().get(0).items().get(0).source()).isEqualTo("generated_task");
+		assertThat(response.days().get(0).items().get(1).source()).isEqualTo("due_point");
+		assertThat(response.days().get(0).items().get(1).dueStatus()).isEqualTo("逾期 2 天");
+		assertThat(response.days().get(1).items())
+				.extracting(item -> item.pointTitle())
+				.containsExactly("事务上下文与线程绑定");
+		assertThat(response.days().get(2).items()).isEmpty();
+	}
+
 	private static Topic topic(String code, String title) {
 		return new Topic(new Domain(UUID.randomUUID(), "spring", "Spring", 40), code, title, TopicSource.BUILTIN, true);
 	}
 
 	private static ReviewPoint point(Topic topic, String title) {
 		return new ReviewPoint(topic, title, 5, 4, 5, "next probe");
+	}
+
+	private static ReviewPoint duePoint(Topic topic, String title, LocalDate dueDate) {
+		ReviewPoint point = point(topic, title);
+		point.updateReviewProgress(
+				BigDecimal.ONE,
+				ReviewPointStatus.DUE,
+				Instant.parse("2026-05-20T00:00:00Z"),
+				dueDate.atStartOfDay().toInstant(ZoneOffset.UTC),
+				1,
+				0,
+				List.of(),
+				"next probe");
+		return point;
 	}
 
 	private ReviewWeaknessEvent weaknessEvent(ReviewPoint point, String category, String label) {

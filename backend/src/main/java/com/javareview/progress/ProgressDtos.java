@@ -2,6 +2,7 @@ package com.javareview.progress;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -86,5 +87,36 @@ public final class ProgressDtos {
 			BigDecimal finalScore,
 			Instant startedAt,
 			Instant endedAt) {
+	}
+
+	public record ReviewPlanCalendarResponse(
+			LocalDate startDate,
+			LocalDate endDate,
+			List<ReviewPlanDayResponse> days) {
+	}
+
+	public record ReviewPlanDayResponse(
+			LocalDate date,
+			int itemCount,
+			int estimatedMinutes,
+			List<ReviewPlanItemResponse> items) {
+	}
+
+	public record ReviewPlanItemResponse(
+			UUID taskId,
+			UUID reviewPointId,
+			String source,
+			String type,
+			String typeLabel,
+			String planReason,
+			String status,
+			String statusLabel,
+			String domainName,
+			String topicTitle,
+			String pointTitle,
+			String manualPrompt,
+			int estimatedMinutes,
+			Instant nextReviewAt,
+			String dueStatus) {
 	}
 }

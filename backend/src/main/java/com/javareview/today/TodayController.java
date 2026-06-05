@@ -1,9 +1,11 @@
 package com.javareview.today;
 
+import java.time.LocalDate;
 import java.util.UUID;
 
 import jakarta.validation.Valid;
 
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.javareview.auth.AuthService;
@@ -36,8 +39,12 @@ public class TodayController {
 
 	@GetMapping("/today")
 	public TodayPlanResponse getToday(
-			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal) {
-		return todayPlanService.getToday(currentUser(principal));
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,
+			@RequestParam(required = false)
+			@DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+			LocalDate date) {
+		User user = currentUser(principal);
+		return date == null ? todayPlanService.getToday(user) : todayPlanService.getPlan(user, date);
 	}
 
 	@PostMapping("/today/generate")
