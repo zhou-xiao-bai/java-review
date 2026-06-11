@@ -49,6 +49,9 @@ public class Topic {
 	@Column(name = "interview_value", nullable = false)
 	private int interviewValue = 3;
 
+	@Column(name = "new_expansion_limit", nullable = false)
+	private int newExpansionLimit = 2;
+
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private Instant createdAt;
 
@@ -69,6 +72,7 @@ public class Topic {
 			this.relevanceTier = RelevanceTier.PROJECT;
 			this.interviewValue = 4;
 		}
+		this.newExpansionLimit = defaultNewExpansionLimit(this.interviewValue);
 	}
 
 	@PrePersist
@@ -123,13 +127,39 @@ public class Topic {
 		return interviewValue;
 	}
 
+	public int getNewExpansionLimit() {
+		return newExpansionLimit;
+	}
+
 	public boolean isAutoPlannable() {
 		return selected && planEnabled && relevanceTier.autoPlannable();
 	}
 
 	public void updatePlanning(RelevanceTier relevanceTier, boolean planEnabled, int interviewValue) {
+		updatePlanning(relevanceTier, planEnabled, interviewValue, defaultNewExpansionLimit(interviewValue));
+	}
+
+	public void updatePlanning(
+			RelevanceTier relevanceTier,
+			boolean planEnabled,
+			int interviewValue,
+			int newExpansionLimit) {
 		this.relevanceTier = relevanceTier;
 		this.planEnabled = planEnabled;
 		this.interviewValue = interviewValue;
+		this.newExpansionLimit = newExpansionLimit;
+	}
+
+	private static int defaultNewExpansionLimit(int interviewValue) {
+		if (interviewValue >= 5) {
+			return 4;
+		}
+		if (interviewValue >= 4) {
+			return 3;
+		}
+		if (interviewValue >= 3) {
+			return 2;
+		}
+		return 1;
 	}
 }

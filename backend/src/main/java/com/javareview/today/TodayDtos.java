@@ -1,85 +1,55 @@
 package com.javareview.today;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
+
+import com.javareview.reviewunit.TodayReviewActionType;
 
 public final class TodayDtos {
 
 	private TodayDtos() {
 	}
 
-	public record TodayPlanResponse(
+	public record TodayQueueResponse(
 			LocalDate date,
-			int capacityMinutes,
-			int scheduledMinutes,
-			int completedMinutes,
-			int remainingMinutes,
-			TodaySummaryResponse summary,
-			List<TaskGroupResponse> groups) {
+			List<TodayQueueGroupResponse> groups) {
 	}
 
-	public record TodaySummaryResponse(
-			SummaryMetricResponse carryOver,
-			SummaryMetricResponse due,
-			SummaryMetricResponse newExpansion,
-			SummaryMetricResponse manual) {
+	public record TodayActionRequest(
+			@NotNull UUID reviewUnitStateId,
+			@NotNull TodayReviewActionType actionType,
+			LocalDate postponeUntil) {
 	}
 
-	public record SummaryMetricResponse(long count, int minutes) {
-	}
-
-	public record TaskGroupResponse(
-			String type,
+	public record TodayQueueGroupResponse(
+			String reason,
 			String label,
 			long count,
-			int scheduledMinutes,
-			List<ReviewTaskResponse> tasks) {
+			List<TodayQueueItemResponse> items) {
 	}
 
-	public record ReviewTaskResponse(
-			UUID id,
-			UUID reviewPointId,
-			UUID topicId,
-			String topicTitle,
+	public record TodayQueueItemResponse(
+			UUID reviewUnitId,
+			UUID stateId,
+			UUID scopeId,
+			String scopeTitle,
 			String domainName,
-			String pointTitle,
-			String manualPrompt,
-			LocalDate date,
-			String type,
-			String typeLabel,
-			String planReason,
+			String unitTitle,
 			String status,
-			String statusLabel,
-			BigDecimal priorityScore,
-			int estimatedMinutes,
-			String dueStatus,
+			String reason,
+			String reasonLabel,
+			int importance,
+			int difficulty,
+			int interviewFrequency,
 			Instant nextReviewAt,
-			Instant createdAt,
-			Instant completedAt,
-			Instant removedAt) {
-	}
-
-	public record CreateManualTaskRequest(
-			@NotBlank
-			@Size(max = 1000)
-			String prompt,
-			@Min(1)
-			@Max(120)
-			Integer estimatedMinutes) {
-	}
-
-	public record RemoveReviewTasksRequest(
-			@NotEmpty
-			List<@NotNull UUID> taskIds) {
+			Instant admittedAt,
+			Instant lastReviewedAt,
+			String lastResult,
+			int consecutiveSuccessCount,
+			int consecutiveFailureCount) {
 	}
 }

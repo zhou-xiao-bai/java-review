@@ -14,7 +14,7 @@ public final class ReviewSessionDtos {
 	private ReviewSessionDtos() {
 	}
 
-	public record StartReviewSessionRequest(@NotNull UUID taskId) {
+	public record StartReviewSessionRequest(@NotNull UUID reviewUnitStateId) {
 	}
 
 	public record SubmitAnswerRequest(
@@ -30,17 +30,35 @@ public final class ReviewSessionDtos {
 
 	public record ReviewSessionResponse(
 			UUID id,
-			UUID taskId,
+			UUID reviewUnitStateId,
+			UUID reviewUnitId,
 			String status,
 			String topicTitle,
 			String pointTitle,
-			String manualPrompt,
 			Instant startedAt,
 			Instant endedAt,
 			BigDecimal finalScore,
 			String summary,
 			ReviewEvaluation evaluation,
+			Instant nextReviewAt,
+			ReviewPlanExplanation reviewPlanExplanation,
 			List<ReviewTurnResponse> turns) {
+	}
+
+	public record ReviewPlanExplanation(
+			String scheduleRule,
+			String scheduleReason,
+			String nextReviewAtText,
+			BigDecimal priorityScore,
+			List<ReviewPlanFactor> priorityFactors) {
+	}
+
+	public record ReviewPlanFactor(
+			String key,
+			String label,
+			String value,
+			BigDecimal contribution,
+			String description) {
 	}
 
 	public record ReviewTurnResponse(

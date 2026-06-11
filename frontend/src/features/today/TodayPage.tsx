@@ -1,214 +1,77 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
+  BookOpenCheck,
   CalendarDays,
-  CheckSquare,
+  CheckCircle2,
   Clock,
+  EyeOff,
   Loader2,
   Play,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  SkipForward,
-  Square,
-  Trash2,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 import { useCurrentUser } from '@/features/auth/hooks/useCurrentUser'
 import {
-  createManualTask,
-  generateToday,
+  applyTodayAction,
   getApiErrorMessage,
-  getToday,
-  regenerateToday,
-  removeReviewTask,
-  removeReviewTasks,
-  skipReviewTask,
-  unskipReviewTask,
-  type ReviewTask,
-  type ReviewTaskGroup,
-  type SummaryMetric,
-  type TodayPlan,
+  getTodayQueue,
+  type TodayActionRequest,
+  type TodayActionType,
+  type TodayQueue,
+  type TodayQueueGroup,
+  type TodayQueueItem,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-const estimateOptions = [5, 10, 15, 20, 30]
+const todayQueueQueryKey = ['today-queue'] as const
 
 export function TodayPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const currentUserQuery = useCurrentUser()
-  const currentDate = localDateString()
-  const [viewDate, setViewDate] = useState(() => currentDate)
-  const [manualPrompt, setManualPrompt] = useState('')
-  const [manualMinutes, setManualMinutes] = useState(10)
-  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
-    () => new Set(),
+  const queueQuery = useQuery({
+    queryKey: todayQueueQueryKey,
+    queryFn: getTodayQueue,
+  })
+  const actionMutation = useMutation({
+    mutationFn: applyTodayAction,
+    onSuccess: (queue) => {
+      queryClient.setQueryData(todayQueueQueryKey, queue)
+    },
+  })
+  const queue = queueQuery.data
+  const items = useMemo(
+    () => queue?.groups.flatMap((group) => group.items) ?? [],
+    [queue],
   )
-  const isTodayView = viewDate === currentDate
-  const planQueryKey = useMemo(() => todayQueryKey(viewDate), [viewDate])
-
-  const todayQuery = useQuery({
-    queryKey: planQueryKey,
-    queryFn: () => getToday(viewDate),
-  })
-
-  const generateMutation = useMutation({
-    mutationFn: generateToday,
-    onSuccess: (plan) => {
-      applyTodayPlan(plan)
-    },
-  })
-
-  const regenerateMutation = useMutation({
-    mutationFn: regenerateToday,
-    onSuccess: (plan) => {
-      applyTodayPlan(plan)
-    },
-  })
-
-  const manualMutation = useMutation({
-    mutationFn: createManualTask,
-    onSuccess: async () => {
-      setManualPrompt('')
-      setManualMinutes(10)
-      await queryClient.invalidateQueries({ queryKey: todayQueryKey(currentDate) })
-    },
-  })
-
-  const skipMutation = useMutation({
-    mutationFn: skipReviewTask,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['today'] })
-    },
-  })
-
-  const unskipMutation = useMutation({
-    mutationFn: unskipReviewTask,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['today'] })
-    },
-  })
-
-  const removeMutation = useMutation({
-    mutationFn: removeReviewTask,
-    onSuccess: (plan) => {
-      applyTodayPlan(plan)
-    },
-  })
-
-  const batchRemoveMutation = useMutation({
-    mutationFn: removeReviewTasks,
-    onSuccess: (plan) => {
-      applyTodayPlan(plan)
-    },
-  })
-
-  const plan = todayQuery.data
-  const allTasks = useMemo(
-    () => plan?.groups.flatMap((group) => group.tasks) ?? [],
-    [plan],
-  )
-  const allTaskIds = useMemo(() => allTasks.map((task) => task.id), [allTasks])
-  const selectedVisibleTaskIds = useMemo(
-    () => allTaskIds.filter((id) => selectedTaskIds.has(id)),
-    [allTaskIds, selectedTaskIds],
-  )
-  const selectedCount = selectedVisibleTaskIds.length
-  const allSelected = allTaskIds.length > 0 && selectedCount === allTaskIds.length
-  const taskCount = useMemo(
-    () => plan?.groups.reduce((count, group) => count + group.tasks.length, 0) ?? 0,
-    [plan],
-  )
-  const pendingTaskCount = useMemo(
+  const requiredCount = useMemo(
     () =>
-      plan?.groups.reduce(
-        (count, group) =>
-          count +
-          group.tasks.filter((task) =>
-            ['pending', 'in_progress'].includes(task.status),
-          ).length,
-        0,
-      ) ?? 0,
-    [plan],
+      queue?.groups
+        .filter((group) => ['overdue', 'due_today'].includes(group.reason))
+        .reduce((count, group) => count + group.items.length, 0) ?? 0,
+    [queue],
   )
-  const errorMessage =
-    getApiErrorMessage(generateMutation.error, '') ||
-    getApiErrorMessage(regenerateMutation.error, '') ||
-    getApiErrorMessage(manualMutation.error, '') ||
-    getApiErrorMessage(skipMutation.error, '') ||
-    getApiErrorMessage(unskipMutation.error, '') ||
-    getApiErrorMessage(removeMutation.error, '') ||
-    getApiErrorMessage(batchRemoveMutation.error, '') ||
-    (todayQuery.isError ? getApiErrorMessage(todayQuery.error) : '')
+  const firstReviewCount =
+    queue?.groups.find((group) => group.reason === 'pending_first_review')?.items
+      .length ?? 0
+  const errorMessage = queueQuery.isError
+    ? getApiErrorMessage(queueQuery.error)
+    : getApiErrorMessage(actionMutation.error, '')
+  const actionPending = actionMutation.isPending
 
-  function applyTodayPlan(nextPlan: TodayPlan) {
-    queryClient.setQueryData(todayQueryKey(nextPlan.date), nextPlan)
-    const visibleIds = new Set(taskIds(nextPlan))
-    setSelectedTaskIds((current) => {
-      const next = new Set([...current].filter((id) => visibleIds.has(id)))
-      return next.size === current.size ? current : next
-    })
-  }
-
-  function handleManualSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!isTodayView) {
-      return
+  function applyQueueAction(
+    item: TodayQueueItem,
+    actionType: TodayActionType,
+    postponeUntil?: string | null,
+  ) {
+    const body: TodayActionRequest = {
+      reviewUnitStateId: item.stateId,
+      actionType,
+      postponeUntil,
     }
-    manualMutation.mutate({
-      prompt: manualPrompt,
-      estimatedMinutes: manualMinutes,
-    })
-  }
-
-  function handleViewDateChange(nextDate: string) {
-    if (!nextDate) {
-      return
-    }
-    setViewDate(nextDate)
-    setSelectedTaskIds(new Set())
-  }
-
-  function toggleAllTasks() {
-    setSelectedTaskIds(() => (allSelected ? new Set() : new Set(allTaskIds)))
-  }
-
-  function toggleGroup(group: ReviewTaskGroup) {
-    const groupIds = group.tasks.map((task) => task.id)
-    const groupSelected = groupIds.every((id) => selectedTaskIds.has(id))
-    setSelectedTaskIds((current) => {
-      const next = new Set(current)
-      for (const id of groupIds) {
-        if (groupSelected) {
-          next.delete(id)
-        } else {
-          next.add(id)
-        }
-      }
-      return next
-    })
-  }
-
-  function toggleTask(task: ReviewTask) {
-    setSelectedTaskIds((current) => {
-      const next = new Set(current)
-      if (next.has(task.id)) {
-        next.delete(task.id)
-      } else {
-        next.add(task.id)
-      }
-      return next
-    })
-  }
-
-  function removeSelectedTasks() {
-    const ids = selectedVisibleTaskIds
-    if (ids.length > 0) {
-      batchRemoveMutation.mutate(ids)
-    }
+    actionMutation.mutate(body)
   }
 
   return (
@@ -217,100 +80,24 @@ export function TodayPage() {
         <div>
           <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
             <CalendarDays className="size-4 text-emerald-700" aria-hidden="true" />
-            <span>{formatPlanDate(plan?.date ?? viewDate)}</span>
-            {currentUserQuery.data ? (
-              <span className="text-slate-300">/</span>
-            ) : null}
-            {currentUserQuery.data ? (
-              <span>{currentUserQuery.data.displayName}</span>
-            ) : null}
+            <span>{formatPlanDate(queue?.date)}</span>
+            {currentUserQuery.data ? <span className="text-slate-300">/</span> : null}
+            {currentUserQuery.data ? <span>{currentUserQuery.data.displayName}</span> : null}
           </div>
           <h1 className="mt-2 text-3xl font-semibold text-slate-950">
-            复习计划
+            今日复习队列
           </h1>
         </div>
 
-        <div className="flex flex-col gap-2 xl:items-end">
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm">
-              <CalendarDays className="size-4 text-slate-400" aria-hidden="true" />
-              <input
-                type="date"
-                value={viewDate}
-                onChange={(event) => handleViewDateChange(event.target.value)}
-                className="bg-transparent text-sm outline-none"
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => handleViewDateChange(currentDate)}
-              disabled={isTodayView}
-              className="inline-flex h-10 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              今天
-            </button>
-            {!isTodayView ? (
-              <span className="inline-flex h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-500">
-                只读视图
-              </span>
-            ) : null}
-          </div>
-
-          <div className="flex flex-wrap gap-2 xl:justify-end">
-            <button
-              type="button"
-              disabled={
-                !isTodayView ||
-                generateMutation.isPending ||
-                regenerateMutation.isPending
-              }
-              onClick={() => generateMutation.mutate()}
-              className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {generateMutation.isPending ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <RefreshCw className="size-4" aria-hidden="true" />
-              )}
-              补齐今日计划
-            </button>
-            <button
-              type="button"
-              disabled={
-                !isTodayView ||
-                generateMutation.isPending ||
-                regenerateMutation.isPending
-              }
-              onClick={() => regenerateMutation.mutate()}
-              className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {regenerateMutation.isPending ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <RefreshCw className="size-4" aria-hidden="true" />
-              )}
-              重排待开始任务
-            </button>
-            <button
-              type="button"
-              disabled={!isTodayView || pendingTaskCount === 0}
-              onClick={() => navigate('/review/session')}
-              className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Play className="size-4" aria-hidden="true" />
-              手动选择
-            </button>
-            <button
-              type="button"
-              disabled={!isTodayView || pendingTaskCount === 0}
-              onClick={() => navigate('/review/session?mode=immersive')}
-              className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-700 px-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Play className="size-4" aria-hidden="true" />
-              沉浸式复习
-            </button>
-          </div>
-        </div>
+        <button
+          type="button"
+          disabled={items.length === 0}
+          onClick={() => navigate('/review/session?mode=immersive')}
+          className="inline-flex h-10 w-fit items-center gap-2 rounded-md bg-emerald-700 px-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Play className="size-4" aria-hidden="true" />
+          沉浸式复习
+        </button>
       </div>
 
       {errorMessage ? (
@@ -320,575 +107,348 @@ export function TodayPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="space-y-4">
-          <PlanProgress plan={plan} loading={todayQuery.isLoading} />
+      <TodayQueuePanel
+        firstReviewCount={firstReviewCount}
+        loading={queueQuery.isLoading}
+        queue={queue}
+        requiredCount={requiredCount}
+        totalCount={items.length}
+        actionPending={actionPending}
+        pendingActionStateId={actionPending ? actionMutation.variables?.reviewUnitStateId ?? null : null}
+        onAction={applyQueueAction}
+        onStart={(item) => navigate(`/review/session?stateId=${item.stateId}`)}
+      />
+    </section>
+  )
+}
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <SummaryCard
-              label={isTodayView ? '顺延未完成' : '当日顺延'}
-              metric={plan?.summary.carryOver}
-              tone="amber"
-            />
-            <SummaryCard
-              label={isTodayView ? '今日到期' : '当日到期'}
-              metric={plan?.summary.due}
-              tone="rose"
-            />
-            <SummaryCard
-              label="新拓展"
-              metric={plan?.summary.newExpansion}
-              tone="emerald"
-            />
-            <SummaryCard
-              label={isTodayView ? '今日加练' : '当日加练'}
-              metric={plan?.summary.manual}
-              tone="slate"
-            />
+function TodayQueuePanel({
+  firstReviewCount,
+  loading,
+  onAction,
+  onStart,
+  actionPending,
+  pendingActionStateId,
+  queue,
+  requiredCount,
+  totalCount,
+}: {
+  firstReviewCount: number
+  loading: boolean
+  onAction: (item: TodayQueueItem, actionType: TodayActionType, postponeUntil?: string | null) => void
+  onStart: (item: TodayQueueItem) => void
+  actionPending: boolean
+  pendingActionStateId: string | null
+  queue: TodayQueue | undefined
+  requiredCount: number
+  totalCount: number
+}) {
+  const groups = queue?.groups ?? []
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <BookOpenCheck className="size-4 text-emerald-700" aria-hidden="true" />
+            <h2 className="text-sm font-semibold text-slate-950">
+              动态复习队列
+            </h2>
           </div>
-
-          {taskCount > 0 && isTodayView ? (
-            <SelectionToolbar
-              allSelected={allSelected}
-              pending={batchRemoveMutation.isPending}
-              selectedCount={selectedCount}
-              totalCount={allTaskIds.length}
-              onClear={() => setSelectedTaskIds(new Set())}
-              onRemove={removeSelectedTasks}
-              onToggleAll={toggleAllTasks}
-            />
-          ) : null}
-
-          {todayQuery.isLoading ? (
-            <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
-              正在加载今日计划...
-            </div>
-          ) : taskCount === 0 ? (
-            <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
-              {isTodayView
-                ? '暂无今日计划。请先在范围管理选择复习范围，再补齐今日计划，或追加一条今日加练。'
-                : '该日期暂无复习计划。'}
-            </div>
-          ) : (
-            plan?.groups.map((group) => (
-              <TaskGroupPanel
-                key={group.type}
-                group={group}
-                skippingTaskId={skipMutation.variables}
-                skipPending={skipMutation.isPending}
-                unskippingTaskId={unskipMutation.variables}
-                unskipPending={unskipMutation.isPending}
-                selectedTaskIds={selectedTaskIds}
-                removingTaskId={removeMutation.variables}
-                removePending={removeMutation.isPending}
-                batchRemovingTaskIds={batchRemoveMutation.variables ?? []}
-                batchRemovePending={batchRemoveMutation.isPending}
-                readOnly={!isTodayView}
-                onSkip={(task) => skipMutation.mutate(task.id)}
-                onUnskip={(task) => unskipMutation.mutate(task.id)}
-                onToggleGroup={() => toggleGroup(group)}
-                onToggleTask={toggleTask}
-                onRemove={(task) => removeMutation.mutate(task.id)}
-              />
-            ))
-          )}
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            今日队列只查询复习单元状态，不创建、不补齐、不恢复任务。
+          </p>
         </div>
 
-        <aside className="h-fit rounded-lg border border-slate-200 bg-white p-5 shadow-sm lg:sticky lg:top-24">
-          {isTodayView ? (
-            <>
-              <div className="flex items-center gap-2">
-                <Plus className="size-4 text-emerald-700" aria-hidden="true" />
-                <h2 className="text-sm font-semibold text-slate-950">追加今日加练</h2>
-              </div>
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <QueueMetric label="全部" value={totalCount} />
+          <QueueMetric label="必须处理" value={requiredCount} tone="rose" />
+          <QueueMetric label="待首考" value={firstReviewCount} tone="emerald" />
+        </div>
+      </div>
 
-              <form className="mt-4 space-y-3" onSubmit={handleManualSubmit}>
-                <textarea
-                  required
-                  rows={5}
-                  maxLength={1000}
-                  value={manualPrompt}
-                  onChange={(event) => setManualPrompt(event.target.value)}
-                  className="w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-slate-500"
-                  placeholder="例如：手写 AQS acquire 流程并说明中断处理边界"
-                />
+      {loading ? (
+        <div className="flex items-center gap-2 px-5 py-8 text-sm text-slate-500">
+          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          正在加载复习队列...
+        </div>
+      ) : totalCount === 0 ? (
+        <div className="px-5 py-8 text-sm leading-6 text-slate-500">
+          暂无需要处理的复习单元。已准入但未到期的内容会在对应日期出现。
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-100">
+          {groups.map((group) => (
+            <TodayQueueGroupPanel
+              key={group.reason}
+              group={group}
+              onAction={onAction}
+              onStart={onStart}
+              actionPending={actionPending}
+              pendingActionStateId={pendingActionStateId}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
-                <div className="grid grid-cols-[1fr_112px] gap-3">
-                  <label className="flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-600">
-                    <Clock className="size-4 text-slate-400" aria-hidden="true" />
-                    预计时长
-                  </label>
-                  <select
-                    value={manualMinutes}
-                    onChange={(event) => setManualMinutes(Number(event.target.value))}
-                    className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500"
-                  >
-                    {estimateOptions.map((minutes) => (
-                      <option key={minutes} value={minutes}>
-                        {minutes} 分钟
-                      </option>
-                    ))}
-                  </select>
-                </div>
+function QueueMetric({
+  label,
+  tone = 'slate',
+  value,
+}: {
+  label: string
+  tone?: 'emerald' | 'rose' | 'slate'
+  value: number
+}) {
+  return (
+    <div className="min-w-20 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <div
+        className={cn(
+          'text-lg font-semibold',
+          tone === 'emerald' && 'text-emerald-700',
+          tone === 'rose' && 'text-rose-700',
+          tone === 'slate' && 'text-slate-950',
+        )}
+      >
+        {value}
+      </div>
+      <div className="text-xs text-slate-500">{label}</div>
+    </div>
+  )
+}
 
-                <button
-                  type="submit"
-                  disabled={manualMutation.isPending}
-                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {manualMutation.isPending ? (
-                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Plus className="size-4" aria-hidden="true" />
-                  )}
-                  添加加练
-                </button>
-              </form>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <CalendarDays className="size-4 text-slate-500" aria-hidden="true" />
-                <h2 className="text-sm font-semibold text-slate-950">日期视图</h2>
-              </div>
-              <p className="mt-3 text-sm leading-6 text-slate-500">
-                当前日期只展示已生成的计划，不会补齐、重排或追加加练。
-              </p>
-            </>
-          )}
-        </aside>
+function TodayQueueGroupPanel({
+  group,
+  onAction,
+  onStart,
+  actionPending,
+  pendingActionStateId,
+}: {
+  group: TodayQueueGroup
+  onAction: (item: TodayQueueItem, actionType: TodayActionType, postponeUntil?: string | null) => void
+  onStart: (item: TodayQueueItem) => void
+  actionPending: boolean
+  pendingActionStateId: string | null
+}) {
+  if (group.items.length === 0) {
+    return null
+  }
+
+  return (
+    <section>
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 px-5 py-3">
+        <div className="flex items-center gap-2">
+          <QueueReasonDot reason={group.reason} />
+          <h3 className="text-sm font-semibold text-slate-950">{group.label}</h3>
+        </div>
+        <span className="text-xs font-medium text-slate-500">
+          {group.items.length} 个复习单元
+        </span>
+      </div>
+
+      <div className="divide-y divide-slate-100">
+        {group.items.map((item) => (
+          <TodayQueueRow
+            key={item.reviewUnitId}
+            item={item}
+            pending={pendingActionStateId === item.stateId}
+            actionPending={actionPending}
+            onAction={(actionType, postponeUntil) => onAction(item, actionType, postponeUntil)}
+            onStart={() => onStart(item)}
+          />
+        ))}
       </div>
     </section>
   )
 }
 
-function PlanProgress({
-  loading,
-  plan,
-}: {
-  loading: boolean
-  plan: TodayPlan | undefined
-}) {
-  const capacity = plan?.capacityMinutes ?? 60
-  const scheduled = plan?.scheduledMinutes ?? 0
-  const completed = plan?.completedMinutes ?? 0
-  const scheduledPercent = percent(scheduled, capacity)
-  const completedPercent = percent(completed, capacity)
-
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <div className="text-sm font-semibold text-slate-950">
-            今日计划进度
-          </div>
-          <div className="mt-1 text-xs text-slate-500">
-            {loading
-              ? '加载中'
-              : `已安排 ${scheduled}/${capacity} 分钟 · 已完成 ${completed} 分钟`}
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="text-2xl font-semibold text-slate-950">
-            {Math.min(scheduled, capacity)}
-            <span className="text-sm font-medium text-slate-400">/{capacity}</span>
-          </div>
-          <div className="text-xs text-slate-500">分钟</div>
-        </div>
-      </div>
-
-      <div className="relative mt-4 h-3 overflow-hidden rounded-full bg-slate-100">
-        <div
-          className="absolute inset-y-0 left-0 rounded-full bg-slate-300"
-          style={{ width: `${scheduledPercent}%` }}
-        />
-        <div
-          className="absolute inset-y-0 left-0 rounded-full bg-emerald-600"
-          style={{ width: `${completedPercent}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
-function SummaryCard({
-  label,
-  metric,
-  tone,
-}: {
-  label: string
-  metric: SummaryMetric | undefined
-  tone: 'amber' | 'emerald' | 'rose' | 'slate'
-}) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-medium text-slate-500">{label}</div>
-        <span
-          className={cn(
-            'size-2 rounded-full',
-            tone === 'amber' && 'bg-amber-500',
-            tone === 'emerald' && 'bg-emerald-600',
-            tone === 'rose' && 'bg-rose-500',
-            tone === 'slate' && 'bg-slate-500',
-          )}
-        />
-      </div>
-      <div className="mt-3 text-2xl font-semibold text-slate-950">
-        {metric?.count ?? 0}
-      </div>
-      <div className="mt-1 text-xs text-slate-500">
-        {metric?.minutes ?? 0} 分钟
-      </div>
-    </div>
-  )
-}
-
-function SelectionToolbar({
-  allSelected,
-  onClear,
-  onRemove,
-  onToggleAll,
+function TodayQueueRow({
+  item,
+  onAction,
+  onStart,
+  actionPending,
   pending,
-  selectedCount,
-  totalCount,
 }: {
-  allSelected: boolean
-  onClear: () => void
-  onRemove: () => void
-  onToggleAll: () => void
+  item: TodayQueueItem
+  onAction: (actionType: TodayActionType, postponeUntil?: string | null) => void
+  onStart: () => void
+  actionPending: boolean
   pending: boolean
-  selectedCount: number
-  totalCount: number
 }) {
+  const disabled = pending || actionPending
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-      <button
-        type="button"
-        onClick={onToggleAll}
-        className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
-      >
-        {allSelected ? (
-          <CheckSquare className="size-4 text-emerald-700" aria-hidden="true" />
-        ) : (
-          <Square className="size-4" aria-hidden="true" />
-        )}
-        {allSelected ? '取消全选' : `全选 ${totalCount} 项`}
-      </button>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-slate-500">
-          已选 {selectedCount} 项
-        </span>
-        {selectedCount > 0 ? (
-          <button
-            type="button"
-            onClick={onClear}
-            disabled={pending}
-            className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            清空选择
-          </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={onRemove}
-          disabled={selectedCount === 0 || pending}
-          className="inline-flex h-9 items-center gap-2 rounded-md bg-rose-600 px-3 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {pending ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <Trash2 className="size-4" aria-hidden="true" />
-          )}
-          移出今日计划
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function TaskGroupPanel({
-  batchRemovePending,
-  batchRemovingTaskIds,
-  group,
-  onRemove,
-  onSkip,
-  onToggleGroup,
-  onToggleTask,
-  onUnskip,
-  removePending,
-  removingTaskId,
-  selectedTaskIds,
-  skipPending,
-  skippingTaskId,
-  readOnly,
-  unskipPending,
-  unskippingTaskId,
-}: {
-  batchRemovePending: boolean
-  batchRemovingTaskIds: string[]
-  group: ReviewTaskGroup
-  onRemove: (task: ReviewTask) => void
-  onSkip: (task: ReviewTask) => void
-  onToggleGroup: () => void
-  onToggleTask: (task: ReviewTask) => void
-  onUnskip: (task: ReviewTask) => void
-  removePending: boolean
-  removingTaskId: string | undefined
-  readOnly: boolean
-  selectedTaskIds: Set<string>
-  skipPending: boolean
-  skippingTaskId: string | undefined
-  unskipPending: boolean
-  unskippingTaskId: string | undefined
-}) {
-  if (group.tasks.length === 0) {
-    return null
-  }
-
-  const groupSelected = group.tasks.every((task) => selectedTaskIds.has(task.id))
-  const groupIndeterminate = !groupSelected && group.tasks.some((task) => selectedTaskIds.has(task.id))
-
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <button
-            type="button"
-            title={groupSelected ? '取消选择本组' : '选择本组'}
-            aria-label={groupSelected ? '取消选择本组' : '选择本组'}
-            disabled={readOnly}
-            onClick={onToggleGroup}
-            className={cn(
-              'inline-flex size-8 shrink-0 items-center justify-center rounded-md border text-slate-500 hover:bg-slate-50 hover:text-slate-900',
-              groupSelected || groupIndeterminate
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : 'border-slate-200 bg-white',
-              readOnly && 'cursor-not-allowed opacity-40',
-            )}
-          >
-            {groupSelected || groupIndeterminate ? (
-              <CheckSquare className="size-4" aria-hidden="true" />
-            ) : (
-              <Square className="size-4" aria-hidden="true" />
-            )}
-          </button>
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-slate-950">{group.label}</h2>
-            <div className="mt-1 text-xs text-slate-500">
-              {group.count} 项 · {group.scheduledMinutes} 分钟
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="divide-y divide-slate-100">
-        {group.tasks.map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            selected={selectedTaskIds.has(task.id)}
-            skipPending={skipPending && skippingTaskId === task.id}
-            unskipPending={unskipPending && unskippingTaskId === task.id}
-            removePending={
-              (removePending && removingTaskId === task.id) ||
-              (batchRemovePending && batchRemovingTaskIds.includes(task.id))
-            }
-            readOnly={readOnly}
-            onRemove={() => onRemove(task)}
-            onSkip={() => onSkip(task)}
-            onToggle={() => onToggleTask(task)}
-            onUnskip={() => onUnskip(task)}
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function TaskRow({
-  onRemove,
-  onSkip,
-  onToggle,
-  onUnskip,
-  readOnly,
-  removePending,
-  selected,
-  skipPending,
-  unskipPending,
-  task,
-}: {
-  onRemove: () => void
-  onSkip: () => void
-  onToggle: () => void
-  onUnskip: () => void
-  readOnly: boolean
-  removePending: boolean
-  selected: boolean
-  skipPending: boolean
-  unskipPending: boolean
-  task: ReviewTask
-}) {
-  const canSkip = !readOnly && ['pending', 'in_progress'].includes(task.status)
-  const canUnskip = task.status === 'skipped'
-  const actionPending = skipPending || unskipPending || removePending
-  return (
-    <div
-      className={cn(
-        'grid gap-3 px-4 py-3 lg:grid-cols-[32px_minmax(0,1fr)_220px_120px_92px]',
-        selected && 'bg-emerald-50/50',
-      )}
-    >
-      <div className="flex items-start pt-1">
-        <button
-          type="button"
-          title={selected ? '取消选择' : '选择任务'}
-          aria-label={selected ? '取消选择' : '选择任务'}
-          disabled={readOnly}
-          onClick={onToggle}
-          className={cn(
-            'inline-flex size-8 items-center justify-center rounded-md border text-slate-500 hover:bg-slate-50 hover:text-slate-900',
-            selected
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : 'border-slate-200 bg-white',
-            readOnly && 'cursor-not-allowed opacity-40',
-          )}
-        >
-          {selected ? (
-            <CheckSquare className="size-4" aria-hidden="true" />
-          ) : (
-            <Square className="size-4" aria-hidden="true" />
-          )}
-        </button>
-      </div>
-
+    <div className="grid gap-3 px-5 py-4 xl:grid-cols-[minmax(0,1fr)_330px_278px]">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate text-sm font-medium text-slate-950">
-            {task.topicTitle ?? '手动加练'}
+          <span className="truncate text-sm font-semibold text-slate-950">
+            {item.scopeTitle}
           </span>
-          {task.domainName ? (
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">
-              {task.domainName}
-            </span>
-          ) : null}
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">
+            {item.domainName}
+          </span>
+          <QueueStatusTag status={item.status} />
         </div>
         <div className="mt-1 line-clamp-2 text-sm leading-6 text-slate-600">
-          {task.pointTitle ?? task.manualPrompt}
+          {item.unitTitle}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+          <span>准入 {formatInstantDate(item.admittedAt)}</span>
+          <span>上次 {formatInstantDate(item.lastReviewedAt)}</span>
+          <span>下次 {formatInstantDate(item.nextReviewAt)}</span>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-        <PlanReasonTag task={task} />
-        <StatusTag status={task.status} label={task.statusLabel} />
-        <PriorityTag score={task.priorityScore} />
-        <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
-          {task.dueStatus}
-        </span>
+      <div className="flex flex-wrap items-start gap-2 xl:justify-end">
+        <QueueReasonTag item={item} />
+        <ReviewFactorTag label="重要度" value={item.importance} tone="rose" />
+        <ReviewFactorTag label="难度" value={item.difficulty} tone="amber" />
+        <ReviewFactorTag
+          label="频率"
+          value={item.interviewFrequency}
+          tone="emerald"
+        />
+        <AttemptHistoryTag item={item} />
       </div>
 
-      <div className="flex items-center gap-2 text-sm text-slate-600 lg:justify-end">
-        <Clock className="size-4 text-slate-400" aria-hidden="true" />
-        {task.estimatedMinutes} 分钟
-      </div>
-
-      <div className="flex items-center gap-2 lg:justify-end">
-        {canUnskip ? (
-          <button
-            type="button"
-            title="取消跳过"
-            aria-label="取消跳过"
-            disabled={readOnly || actionPending}
-            onClick={onUnskip}
-            className="inline-flex size-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {unskipPending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <RotateCcw className="size-4" aria-hidden="true" />
-            )}
-          </button>
-        ) : (
-          <button
-            type="button"
-            title="跳过任务"
-            aria-label="跳过任务"
-            disabled={!canSkip || actionPending}
-            onClick={onSkip}
-            className="inline-flex size-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {skipPending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <SkipForward className="size-4" aria-hidden="true" />
-            )}
-          </button>
-        )}
+      <div className="flex flex-wrap items-center gap-2 xl:justify-end">
         <button
-            type="button"
-            title="移出今日计划"
-            aria-label="移出今日计划"
-          disabled={readOnly || actionPending}
-          onClick={onRemove}
-          className="inline-flex size-9 items-center justify-center rounded-md border border-rose-200 bg-white text-rose-500 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
+          type="button"
+          title="今天先不做，只从今日队列隐藏"
+          disabled={disabled}
+          onClick={() => onAction('DISMISS_TODAY')}
+          className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {removePending ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          {pending ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
           ) : (
-            <Trash2 className="size-4" aria-hidden="true" />
+            <EyeOff className="size-3.5" aria-hidden="true" />
           )}
+          今日不做
+        </button>
+        <button
+          type="button"
+          title="推迟到明天复习，会更新长期排期"
+          disabled={disabled}
+          onClick={() => onAction('POSTPONE')}
+          className="inline-flex h-9 items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {pending ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <Clock className="size-3.5" aria-hidden="true" />
+          )}
+          明天再看
+        </button>
+        <button
+          type="button"
+          title="记录一次自评掌握，并进入长期复验"
+          disabled={disabled}
+          onClick={() => onAction('SELF_MASTERED')}
+          className="inline-flex h-9 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {pending ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <CheckCircle2 className="size-3.5" aria-hidden="true" />
+          )}
+          已掌握
+        </button>
+        <button
+          type="button"
+          onClick={onStart}
+          disabled={disabled}
+          className="inline-flex h-9 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800"
+        >
+          <Play className="size-4" aria-hidden="true" />
+          开始
         </button>
       </div>
     </div>
   )
 }
 
-function PlanReasonTag({ task }: { task: ReviewTask }) {
+function QueueReasonDot({ reason }: { reason: string }) {
+  return (
+    <span
+      className={cn(
+        'size-2 rounded-full',
+        reason === 'overdue' && 'bg-rose-500',
+        reason === 'due_today' && 'bg-amber-500',
+        reason === 'manual_add' && 'bg-blue-500',
+        reason === 'pending_first_review' && 'bg-emerald-600',
+      )}
+    />
+  )
+}
+
+function QueueReasonTag({ item }: { item: TodayQueueItem }) {
   return (
     <span
       className={cn(
         'rounded px-2 py-1 text-xs font-medium',
-        task.type === 'carry_over' && 'bg-amber-50 text-amber-700',
-        task.type === 'due' && 'bg-rose-50 text-rose-700',
-        task.type === 'new' && 'bg-emerald-50 text-emerald-700',
-        task.type === 'manual' && 'bg-slate-100 text-slate-600',
+        item.reason === 'overdue' && 'bg-rose-50 text-rose-700',
+        item.reason === 'due_today' && 'bg-amber-50 text-amber-700',
+        item.reason === 'manual_add' && 'bg-blue-50 text-blue-700',
+        item.reason === 'pending_first_review' && 'bg-emerald-50 text-emerald-700',
       )}
     >
-      {task.planReason}
+      {item.reasonLabel}
     </span>
   )
 }
 
-function StatusTag({ label, status }: { label: string; status: string }) {
+function QueueStatusTag({ status }: { status: string }) {
+  const label =
+    status === 'PENDING_FIRST_REVIEW'
+      ? '待首考'
+      : status === 'ACTIVE'
+        ? '复习中'
+        : status
   return (
-    <span
-      className={cn(
-        'rounded px-2 py-1 text-xs font-medium',
-        status === 'pending' && 'bg-slate-100 text-slate-600',
-        status === 'in_progress' && 'bg-blue-50 text-blue-700',
-        status === 'completed' && 'bg-emerald-50 text-emerald-700',
-        status === 'skipped' && 'bg-zinc-100 text-zinc-500',
-      )}
-    >
+    <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs font-medium text-zinc-600">
       {label}
     </span>
   )
 }
 
-function PriorityTag({ score }: { score: number }) {
-  const bucket =
-    score >= 35 ? '高' : score >= 24 ? '中' : '低'
+function ReviewFactorTag({
+  label,
+  tone,
+  value,
+}: {
+  label: string
+  tone: 'amber' | 'emerald' | 'rose'
+  value: number
+}) {
   return (
     <span
       className={cn(
         'rounded px-2 py-1 text-xs font-medium',
-        bucket === '高' && 'bg-rose-50 text-rose-700',
-        bucket === '中' && 'bg-amber-50 text-amber-700',
-        bucket === '低' && 'bg-slate-100 text-slate-600',
+        tone === 'amber' && 'bg-amber-50 text-amber-700',
+        tone === 'emerald' && 'bg-emerald-50 text-emerald-700',
+        tone === 'rose' && 'bg-rose-50 text-rose-700',
       )}
     >
-      优先级 {bucket}
+      {label} {value}
+    </span>
+  )
+}
+
+function AttemptHistoryTag({ item }: { item: TodayQueueItem }) {
+  const resultLabel = reviewResultLabel(item.lastResult)
+  if (!resultLabel && item.consecutiveSuccessCount === 0 && item.consecutiveFailureCount === 0) {
+    return (
+      <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
+        暂无记录
+      </span>
+    )
+  }
+
+  return (
+    <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
+      {resultLabel ? `上次${resultLabel}` : '有记录'} · 连对 {item.consecutiveSuccessCount} · 连错 {item.consecutiveFailureCount}
     </span>
   )
 }
@@ -905,22 +465,25 @@ function formatPlanDate(value: string | undefined) {
   }).format(new Date(`${value}T00:00:00`))
 }
 
-function localDateString(date = new Date()) {
-  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-  return localDate.toISOString().slice(0, 10)
-}
-
-function todayQueryKey(date: string) {
-  return ['today', date] as const
-}
-
-function percent(value: number, capacity: number) {
-  if (capacity <= 0) {
-    return 0
+function formatInstantDate(value: string | null) {
+  if (!value) {
+    return '无'
   }
-  return Math.min(100, Math.round((value / capacity) * 100))
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(value))
 }
 
-function taskIds(plan: TodayPlan) {
-  return plan.groups.flatMap((group) => group.tasks.map((task) => task.id))
+function reviewResultLabel(value: string | null) {
+  if (!value) {
+    return ''
+  }
+  const labels: Record<string, string> = {
+    GOOD: '好',
+    PARTIAL: '一般',
+    POOR: '差',
+    SELF_MASTERED: '自评掌握',
+  }
+  return labels[value] ?? value
 }

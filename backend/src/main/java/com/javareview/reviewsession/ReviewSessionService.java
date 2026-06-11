@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,15 +25,25 @@ import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointStatus;
 import com.javareview.reviewpoint.ReviewWeaknessEvent;
 import com.javareview.reviewpoint.ReviewWeaknessEventRepository;
+import com.javareview.reviewunit.ReviewAttempt;
+import com.javareview.reviewunit.ReviewAttemptRepository;
+import com.javareview.reviewunit.ReviewAttemptResult;
+import com.javareview.reviewunit.ReviewAttemptSource;
+import com.javareview.reviewunit.TodayReviewAction;
+import com.javareview.reviewunit.TodayReviewActionRepository;
+import com.javareview.reviewunit.TodayReviewActionType;
+import com.javareview.reviewunit.UserReviewUnitState;
+import com.javareview.reviewunit.UserReviewUnitStateRepository;
+import com.javareview.reviewunit.UserReviewUnitStatus;
 import com.javareview.settings.SettingsService;
 import com.javareview.settings.UserSettings;
-import com.javareview.today.ReviewTask;
-import com.javareview.today.ReviewTaskRepository;
-import com.javareview.today.ReviewTaskStatus;
+import com.javareview.today.ReviewPriorityService;
 import com.javareview.reviewsession.ReviewEvaluation.Correction;
 import com.javareview.reviewsession.ReviewEvaluation.ReviewScore;
 import com.javareview.reviewsession.ReviewEvaluation.WeaknessSignal;
 import com.javareview.reviewsession.ReviewSessionDtos.ClarifyRequest;
+import com.javareview.reviewsession.ReviewSessionDtos.ReviewPlanExplanation;
+import com.javareview.reviewsession.ReviewSessionDtos.ReviewPlanFactor;
 import com.javareview.reviewsession.ReviewSessionDtos.ReviewSessionResponse;
 import com.javareview.reviewsession.ReviewSessionDtos.ReviewTurnResponse;
 import com.javareview.reviewsession.ReviewSessionDtos.StartReviewSessionRequest;
@@ -48,52 +59,55 @@ public class ReviewSessionService {
 	private static final BigDecimal LOW_MASTERY_THRESHOLD = BigDecimal.valueOf(3.5);
 	private static final BigDecimal NEAR_PERFECT_SCORE_THRESHOLD = BigDecimal.valueOf(4.8);
 
-	private final ReviewTaskRepository reviewTaskRepository;
+	private final UserReviewUnitStateRepository reviewUnitStateRepository;
+	private final ReviewAttemptRepository reviewAttemptRepository;
+	private final TodayReviewActionRepository todayReviewActionRepository;
 	private final ReviewSessionRepository reviewSessionRepository;
 	private final ReviewTurnRepository reviewTurnRepository;
 	private final ReviewWeaknessEventRepository weaknessEventRepository;
 	private final SettingsService settingsService;
 	private final LlmClient llmClient;
 	private final ObjectMapper objectMapper;
+	private final ReviewPriorityService reviewPriorityService;
 	private final Clock clock;
 
 	public ReviewSessionService(
-			ReviewTaskRepository reviewTaskRepository,
+			UserReviewUnitStateRepository reviewUnitStateRepository,
+			ReviewAttemptRepository reviewAttemptRepository,
+			TodayReviewActionRepository todayReviewActionRepository,
 			ReviewSessionRepository reviewSessionRepository,
 			ReviewTurnRepository reviewTurnRepository,
 			ReviewWeaknessEventRepository weaknessEventRepository,
 			SettingsService settingsService,
 			LlmClient llmClient,
 			ObjectMapper objectMapper,
+			ReviewPriorityService reviewPriorityService,
 			Clock clock) {
-		this.reviewTaskRepository = reviewTaskRepository;
+		this.reviewUnitStateRepository = reviewUnitStateRepository;
+		this.reviewAttemptRepository = reviewAttemptRepository;
+		this.todayReviewActionRepository = todayReviewActionRepository;
 		this.reviewSessionRepository = reviewSessionRepository;
 		this.reviewTurnRepository = reviewTurnRepository;
 		this.weaknessEventRepository = weaknessEventRepository;
 		this.settingsService = settingsService;
 		this.llmClient = llmClient;
 		this.objectMapper = objectMapper;
+		this.reviewPriorityService = reviewPriorityService;
 		this.clock = clock;
 	}
 
 	@Transactional
 	public ReviewSessionResponse start(User user, StartReviewSessionRequest request) {
-		ReviewTask task = requireTask(user, request.taskId());
-		if (task.isRemoved()) {
-			throw new IllegalStateException("Review task has been removed from today's plan.");
+		UserReviewUnitState state = requireReviewUnitState(user, request.reviewUnitStateId());
+		if (state.getStatus() == UserReviewUnitStatus.ARCHIVED || state.getStatus() == UserReviewUnitStatus.NOT_FOR_ME) {
+			throw new IllegalStateException("Review unit is not startable.");
 		}
-		if (task.getStatus() == ReviewTaskStatus.COMPLETED || task.getStatus() == ReviewTaskStatus.SKIPPED) {
-			throw new IllegalStateException("Review task is no longer startable.");
+		List<ReviewSession> activeSessions = reviewSessionRepository.findActiveByStateIdAndUserId(state.getId(), user.getId());
+		if (!activeSessions.isEmpty()) {
+			return toResponse(activeSessions.getFirst());
 		}
-		if (task.getStatus() == ReviewTaskStatus.IN_PROGRESS) {
-			List<ReviewSession> activeSessions = reviewSessionRepository.findActiveByTaskIdAndUserId(task.getId(), user.getId());
-			if (!activeSessions.isEmpty()) {
-				return toResponse(activeSessions.getFirst());
-			}
-		}
-		task.start();
-		ReviewSession session = reviewSessionRepository.save(new ReviewSession(user, task, Instant.now(clock)));
-		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION, generateInitialQuestion(user, task)));
+		ReviewSession session = reviewSessionRepository.save(new ReviewSession(user, state, Instant.now(clock)));
+		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION, generateInitialQuestion(user, state.getReviewUnit())));
 		return toResponse(session);
 	}
 
@@ -154,44 +168,59 @@ public class ReviewSessionService {
 	public ReviewSessionResponse skip(User user, UUID sessionId) {
 		ReviewSession session = requireActiveSession(user, sessionId);
 		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.USER, ReviewTurnType.SKIP, "跳过本题"));
-		session.getTask().skip(Instant.now(clock));
-		session.abandon(Instant.now(clock));
+		Instant now = Instant.now(clock);
+		session.abandon(now);
+		todayReviewActionRepository.save(new TodayReviewAction(
+				session.getUser(),
+				session.getReviewUnit(),
+				LocalDate.now(clock),
+				TodayReviewActionType.DISMISS_TODAY,
+				null));
 		return toResponse(session);
 	}
 
 	private void finishWithEvaluation(ReviewSession session, ReviewEvaluation evaluation, ReviewTurn weaknessTurn) {
 		Instant now = Instant.now(clock);
 		session.evaluate(evaluation, now);
-		session.getTask().complete(now);
-		ReviewPoint point = session.getTask().getReviewPoint();
-		if (point != null) {
-			saveWeaknessEvents(session, weaknessTurn, evaluation.weakSignals());
-			ReviewPointStatus status = toStatus(evaluation.nextStatus());
-			List<String> weakPoints = weakPointLabels(evaluation);
-			point.updateReviewProgress(
-					evaluation.score().overall(),
-					status,
-					now,
-					nextReviewAt(status, now),
-					point.getReviewCount() + 1,
-					point.getWrongCount() + (evaluation.score().overall().compareTo(BigDecimal.valueOf(3)) < 0 ? 1 : 0),
-					weakPoints,
-					evaluation.nextProbe());
-			if (evaluation.masteryCard() != null) {
-				point.updateMasteryCard(evaluation.masteryCard());
-			}
+		ReviewPoint point = session.getReviewUnit();
+		saveWeaknessEvents(session, weaknessTurn, evaluation.weakSignals());
+		ReviewPointStatus status = toStatus(evaluation.nextStatus());
+		Instant nextReviewAt = nextReviewAt(status, now);
+		List<String> weakPoints = weakPointLabels(evaluation);
+		point.updateReviewProgress(
+				evaluation.score().overall(),
+				status,
+				now,
+				nextReviewAt,
+				point.getReviewCount() + 1,
+				point.getWrongCount() + (evaluation.score().overall().compareTo(BigDecimal.valueOf(3)) < 0 ? 1 : 0),
+				weakPoints,
+				evaluation.nextProbe());
+		if (evaluation.masteryCard() != null) {
+			point.updateMasteryCard(evaluation.masteryCard());
 		}
+		ReviewAttemptResult result = attemptResult(evaluation.score().overall());
+		session.getReviewUnitState().recordAttempt(result, now, nextReviewAt);
+		reviewAttemptRepository.save(new ReviewAttempt(
+				session.getUser(),
+				point,
+				session,
+				ReviewAttemptSource.REVIEW_SESSION,
+				result,
+				evaluation.score().overall(),
+				now,
+				evaluation.overallComment()));
 		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.EVALUATION,
 				evaluation.overallComment()));
 	}
 
-	private ReviewTask requireTask(User user, UUID taskId) {
-		return reviewTaskRepository.findByIdAndUserIdWithPoint(taskId, user.getId())
-				.orElseThrow(() -> new ResourceNotFoundException("Review task not found."));
+	private UserReviewUnitState requireReviewUnitState(User user, UUID stateId) {
+		return reviewUnitStateRepository.findByIdAndUserIdWithUnit(stateId, user.getId())
+				.orElseThrow(() -> new ResourceNotFoundException("Review unit state not found."));
 	}
 
 	private ReviewSession requireSession(User user, UUID sessionId) {
-		return reviewSessionRepository.findByIdAndUserIdWithTask(sessionId, user.getId())
+		return reviewSessionRepository.findByIdAndUserIdWithUnit(sessionId, user.getId())
 				.orElseThrow(() -> new ResourceNotFoundException("Review session not found."));
 	}
 
@@ -204,8 +233,7 @@ public class ReviewSessionService {
 	}
 
 	private ReviewSessionResponse toResponse(ReviewSession session) {
-		ReviewTask task = session.getTask();
-		ReviewPoint point = task.getReviewPoint();
+		ReviewPoint point = session.getReviewUnit();
 		List<ReviewTurn> turns = reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(session.getId());
 		ReviewEvaluation evaluation = evaluationForResponse(session, turns);
 		BigDecimal finalScore = evaluation == null || evaluation.score() == null
@@ -214,16 +242,18 @@ public class ReviewSessionService {
 		String summary = evaluation == null ? session.getSummary() : evaluation.overallComment();
 		return new ReviewSessionResponse(
 				session.getId(),
-				task.getId(),
+				session.getReviewUnitState().getId(),
+				point.getId(),
 				session.getStatus().name().toLowerCase(Locale.ROOT),
-				point == null ? null : point.getTopic().getTitle(),
-				point == null ? null : point.getTitle(),
-				task.getManualPrompt(),
+				point.getTopic().getTitle(),
+				point.getTitle(),
 				session.getStartedAt(),
 				session.getEndedAt(),
 				finalScore,
 				summary,
 				evaluation,
+				point.getNextReviewAt(),
+				reviewPlanExplanation(point),
 				turns.stream()
 						.map(turn -> new ReviewTurnResponse(
 								turn.getId(),
@@ -231,6 +261,30 @@ public class ReviewSessionService {
 								turn.getTurnType().name().toLowerCase(Locale.ROOT),
 								turn.getContent(),
 								turn.getCreatedAt()))
+						.toList());
+	}
+
+	private ReviewPlanExplanation reviewPlanExplanation(ReviewPoint point) {
+		if (point == null) {
+			return null;
+		}
+		LocalDate today = Instant.now(clock).atZone(clock.getZone()).toLocalDate();
+		var priority = reviewPriorityService.explainReviewPoint(point, today, false);
+		return new ReviewPlanExplanation(
+				reviewIntervalLabel(point.getStatus()),
+				reviewIntervalReason(point.getStatus()),
+				point.getNextReviewAt() == null
+						? null
+						: point.getNextReviewAt().atZone(clock.getZone()).toLocalDate().toString(),
+				priority.totalScore(),
+				priority.factors()
+						.stream()
+						.map(factor -> new ReviewPlanFactor(
+								factor.key(),
+								factor.label(),
+								factor.value(),
+								factor.contribution(),
+								factor.description()))
 						.toList());
 	}
 
@@ -331,7 +385,9 @@ public class ReviewSessionService {
 	private ReviewEvaluation normalizeEvaluation(ReviewEvaluation evaluation, ReviewSession session, String answer) {
 		BigDecimal fallbackScore = localScore(answer);
 		List<WeaknessSignal> signals = safeWeakSignals(evaluation);
-		MasteryCard masteryCard = evaluation.masteryCard() == null ? localMasteryCard(session) : evaluation.masteryCard();
+		MasteryCard masteryCard = normalizeMasteryCard(
+				evaluation.masteryCard() == null ? localMasteryCard(session) : evaluation.masteryCard(),
+				session);
 		List<String> missingPoints = safeList(evaluation.missingPoints());
 		List<String> inaccuratePoints = safeList(evaluation.inaccuratePoints());
 		String referenceAnswer = blankToDefault(evaluation.referenceAnswer(), localReferenceAnswer(session));
@@ -357,7 +413,7 @@ public class ReviewSessionService {
 				evaluation.weakPoints() == null || evaluation.weakPoints().isEmpty()
 						? weakPointLabels(signals)
 						: evaluation.weakPoints(),
-				blankToDefault(evaluation.nextProbe(), masteryCard.nextProbe()),
+				normalizeNextProbe(evaluation.nextProbe(), masteryCard.nextProbe(), session),
 				blankToDefault(evaluation.nextStatus(), fallbackScore.compareTo(BigDecimal.valueOf(3)) >= 0 ? "first_pass" : "unstable"),
 				masteryCard);
 	}
@@ -377,9 +433,11 @@ public class ReviewSessionService {
 				? evaluation.missingPoints()
 				: fallback.missingPoints();
 		List<String> inaccuratePoints = safeList(evaluation.inaccuratePoints());
-		MasteryCard masteryCard = isUsefulMasteryCard(evaluation.masteryCard())
-				? evaluation.masteryCard()
-				: fallback.masteryCard();
+		MasteryCard masteryCard = normalizeMasteryCard(
+				isUsefulMasteryCard(evaluation.masteryCard())
+						? evaluation.masteryCard()
+						: fallback.masteryCard(),
+				session);
 		ReviewScore score = normalizeLowScore(evaluation.score());
 		String referenceAnswer = isUsefulNoAnswerText(evaluation.referenceAnswer()) ? evaluation.referenceAnswer() : fallback.referenceAnswer();
 		List<Correction> corrections = teachingCorrections(
@@ -401,13 +459,16 @@ public class ReviewSessionService {
 				score,
 				signals,
 				isUsefulNoAnswerItems(evaluation.weakPoints()) ? evaluation.weakPoints() : weakPointLabels(signals),
-				isUsefulNoAnswerText(evaluation.nextProbe()) ? evaluation.nextProbe() : fallback.nextProbe(),
+				normalizeNextProbe(
+						isUsefulNoAnswerText(evaluation.nextProbe()) ? evaluation.nextProbe() : fallback.nextProbe(),
+						masteryCard.nextProbe(),
+						session),
 				"unstable",
 				masteryCard);
 	}
 
 	private static ReviewEvaluation localNoAnswerEvaluation(ReviewSession session, String evidence, List<ReviewTurn> turns) {
-		String target = taskTitle(session.getTask());
+		String target = sessionTitle(session);
 		String context = reviewContext(session, turns);
 		if (isCacheConsistencyContext(target, context)) {
 			return cacheConsistencyNoAnswerEvaluation(target, evidence, context);
@@ -439,7 +500,7 @@ public class ReviewSessionService {
 						"先更新库再删缓存不能保证强一致，只是把常见窗口压短",
 						"最危险的不是单次读到旧缓存，而是旧值被并发读回源后重新写进 Redis",
 						"生产定位要看商品 id 的 MySQL 版本/更新时间、Redis 值和 TTL、缓存删除日志、回源重建日志"),
-				"给出商品价格更新时，读线程在删除缓存前后分别会读到什么，以及旧值会持续到什么时候。");
+				"围绕商品价格更新的缓存删除失败、并发读旧值回填和旧值持续时间继续考察，可换成时序题或生产定位题。");
 		List<String> missingPoints = List.of(
 				"没有拆出先更新 MySQL、再删除 Redis 之间短暂读到旧缓存的窗口",
 				"没有说明删除 Redis 失败时旧价格会一直留到 TTL、补偿删除或下一次更新",
@@ -473,7 +534,7 @@ public class ReviewSessionService {
 				new ReviewScore(score, score, score, score, score),
 				signals,
 				weakPointLabels(signals),
-				"说明一次商品价格更新中，删除 Redis 失败和并发读旧值回填分别会让旧价格持续多久。",
+				"围绕商品价格更新中的删除失败、并发读旧值回填、旧值持续时间和定位证据继续考察。",
 				"unstable",
 				card);
 	}
@@ -502,7 +563,7 @@ public class ReviewSessionService {
 						"不要只说「" + target + "」这个标题，要把题干里的状态变化讲出来",
 						"边界不是补充项，边界决定这题能不能判定掌握",
 						"排查步骤必须能落到具体日志、状态值或配置项"),
-				"按题干场景说明一次成功路径和两种失败路径，并说出各自会留下什么可观测证据。");
+				"围绕题干场景中的成功路径、失败路径和可观测证据继续考察，可用原题追问或改成场景判断题。");
 		return new ReviewEvaluation(
 				"这次没有形成有效作答。先不要背标题，应该把题干里的对象、操作顺序、状态变化和失败窗口拆出来。",
 				List.of(),
@@ -513,14 +574,14 @@ public class ReviewSessionService {
 				new ReviewScore(score, score, score, score, score),
 				signals,
 				weakPointLabels(signals),
-				"按题干场景说明一次成功路径和两种失败路径，并说出各自的定位证据。",
+				"围绕题干场景中的成功路径、失败路径和定位证据继续考察。",
 				"unstable",
 				card);
 	}
 
 	private ReviewEvaluation localEvaluation(ReviewSession session, String answer, boolean unknown) {
 		BigDecimal overall = unknown ? BigDecimal.valueOf(1.5) : localScore(answer);
-		String target = taskTitle(session.getTask());
+		String target = sessionTitle(session);
 		List<WeaknessSignal> signals = List.of(new WeaknessSignal(
 				unknown ? "unknown" : "insufficient_evidence",
 				target + " 的机制边界仍需复验",
@@ -539,7 +600,7 @@ public class ReviewSessionService {
 					new ReviewScore(overall, overall, overall, overall, overall),
 					signals,
 					weakPointLabels(signals),
-					"要求独立说明 " + target + " 的核心链路、关键边界和排查步骤。",
+					"围绕 " + target + " 的核心链路、关键边界和排查步骤继续考察，可用原问题追问或换成边界/场景题。",
 					"unstable",
 					localMasteryCard(session));
 		}
@@ -554,7 +615,7 @@ public class ReviewSessionService {
 				new ReviewScore(overall, overall, overall, overall, overall),
 				signals,
 				weakPointLabels(signals),
-				"要求说明 " + target + " 的核心链路、失效边界和排查步骤。",
+				"围绕 " + target + " 的核心链路、失效边界和排查步骤继续考察，可换成机制解释题或生产排查题。",
 				overall.compareTo(BigDecimal.valueOf(3)) >= 0 ? "first_pass" : "unstable",
 				localMasteryCard(session));
 	}
@@ -585,10 +646,7 @@ public class ReviewSessionService {
 	}
 
 	private static int maxFollowUpsFor(ReviewSession session) {
-		ReviewPoint point = session.getTask().getReviewPoint();
-		if (point == null) {
-			return DEFAULT_MAX_FOLLOW_UPS;
-		}
+		ReviewPoint point = session.getReviewUnit();
 		if (point.getDifficulty() >= 5 && (point.getImportance() >= 5 || point.getInterviewFrequency() >= 5)) {
 			return HARD_MAX_FOLLOW_UPS;
 		}
@@ -635,7 +693,7 @@ public class ReviewSessionService {
 	}
 
 	private static String forcedFollowUpQuestion(ReviewSession session, AnswerDecision decision) {
-		String target = taskTitle(session.getTask());
+		String target = sessionTitle(session);
 		List<WeaknessSignal> signals = decisionWeakSignals(decision);
 		String gap = signals.stream()
 				.filter(signal -> signal != null && signal.label() != null && !signal.label().isBlank())
@@ -660,11 +718,11 @@ public class ReviewSessionService {
 	}
 
 	private static String fallbackFollowUpQuestion(ReviewSession session) {
-		return "你的回答还不足以收口。请只补充「" + taskTitle(session.getTask()) + "」的一个关键缺口：调用链路、失效边界或生产排查证据中你最确定的一项。";
+		return "你的回答还不足以收口。请只补充「" + sessionTitle(session) + "」的一个关键缺口：调用链路、失效边界或生产排查证据中你最确定的一项。";
 	}
 
 	private static String fallbackClarification(ReviewSession session) {
-		return "这道题主要考察你对「" + taskTitle(session.getTask()) + "」的机制、边界和排查路径的理解。回答时先给结论，再补关键链路、失效场景和排查入口。";
+		return "这道题主要考察你对「" + sessionTitle(session) + "」的机制、边界和排查路径的理解。回答时先给结论，再补关键链路、失效场景和排查入口。";
 	}
 
 	private static boolean isExplicitNoAnswer(String answer) {
@@ -730,8 +788,8 @@ public class ReviewSessionService {
 	}
 
 	private void saveWeaknessEvents(ReviewSession session, ReviewTurn turn, List<WeaknessSignal> signals) {
-		ReviewPoint point = session.getTask().getReviewPoint();
-		if (point == null || signals == null || signals.isEmpty()) {
+		ReviewPoint point = session.getReviewUnit();
+		if (signals == null || signals.isEmpty()) {
 			return;
 		}
 		List<ReviewWeaknessEvent> events = signals.stream()
@@ -790,7 +848,7 @@ public class ReviewSessionService {
 		int expectedCount = expectedCorrectionCount(missingPoints, inaccuratePoints, signals);
 		List<Correction> generatedItems = fallbackCorrections(
 				session,
-				session == null ? "" : taskTitle(session.getTask()),
+				session == null ? "" : sessionTitle(session),
 				referenceAnswer,
 				missingPoints,
 				inaccuratePoints,
@@ -872,7 +930,7 @@ public class ReviewSessionService {
 				"referenceanswer",
 				"见上",
 				"见下",
-				"见详细复盘",
+				"见完整答法",
 				"详见",
 				"参考referenceanswer");
 		return genericFragments.stream().noneMatch(normalized::contains);
@@ -885,7 +943,7 @@ public class ReviewSessionService {
 			List<String> missingPoints,
 			List<String> inaccuratePoints,
 			List<WeaknessSignal> signals) {
-		String resolvedTarget = blankToDefault(target, session == null ? "当前复习点" : taskTitle(session.getTask()));
+		String resolvedTarget = blankToDefault(target, session == null ? "当前复习点" : sessionTitle(session));
 		String resolvedReferenceAnswer = blankToDefault(
 				referenceAnswer,
 				"正确回答要围绕「" + resolvedTarget + "」先给结论，再说明核心机制、关键边界和生产排查证据。");
@@ -1072,6 +1130,55 @@ public class ReviewSessionService {
 				&& concreteItems >= 2;
 	}
 
+	private static MasteryCard normalizeMasteryCard(MasteryCard masteryCard, ReviewSession session) {
+		MasteryCard fallback = localMasteryCard(session);
+		MasteryCard source = masteryCard == null ? fallback : masteryCard;
+		List<String> answerSkeleton = compactStrings(source.answerSkeleton());
+		List<String> mustRemember = compactStrings(source.mustRemember());
+		return new MasteryCard(
+				blankToDefault(source.oneSentence(), fallback.oneSentence()),
+				answerSkeleton.isEmpty() ? fallback.answerSkeleton() : answerSkeleton,
+				mustRemember.isEmpty() ? fallback.mustRemember() : mustRemember,
+				normalizeNextProbe(source.nextProbe(), fallback.nextProbe(), session));
+	}
+
+	private static String normalizeNextProbe(String value, String fallback, ReviewSession session) {
+		String resolved = blankToDefault(value, fallback).trim();
+		if (resolved.isBlank()) {
+			return localMasteryCard(session).nextProbe();
+		}
+		if (!looksLikeFixedQuestion(resolved)) {
+			return resolved;
+		}
+		String direction = stripQuestionLead(resolved);
+		if (direction.isBlank()) {
+			direction = sessionTitle(session);
+		}
+		return "围绕" + direction + "继续考察，可用原问题，也可换成场景题、对比题或生产排查题。";
+	}
+
+	private static boolean looksLikeFixedQuestion(String value) {
+		String normalized = value.trim();
+		return normalized.endsWith("？")
+				|| normalized.endsWith("?")
+				|| normalized.startsWith("请")
+				|| normalized.startsWith("为什么")
+				|| normalized.startsWith("如何")
+				|| normalized.startsWith("怎么")
+				|| normalized.startsWith("说明")
+				|| normalized.startsWith("要求");
+	}
+
+	private static String stripQuestionLead(String value) {
+		String normalized = value.trim()
+				.replaceFirst("^[请要求]+", "")
+				.replaceFirst("^独立", "")
+				.replaceFirst("^(为什么|如何|怎么|说明)", "")
+				.replaceAll("[？?。.]$", "")
+				.trim();
+		return normalized.startsWith("围绕") ? normalized.substring("围绕".length()).trim() : normalized;
+	}
+
 	private static boolean isUsefulNoAnswerItems(List<String> values) {
 		if (safeList(values).isEmpty()) {
 			return false;
@@ -1129,7 +1236,7 @@ public class ReviewSessionService {
 
 	private static String reviewContext(ReviewSession session, List<ReviewTurn> turns) {
 		String question = latestQuestion(turns);
-		String target = taskTitle(session.getTask());
+		String target = sessionTitle(session);
 		if (question.isBlank()) {
 			return target;
 		}
@@ -1185,7 +1292,7 @@ public class ReviewSessionService {
 	}
 
 	private static MasteryCard localMasteryCard(ReviewSession session) {
-		String target = taskTitle(session.getTask());
+		String target = sessionTitle(session);
 		return new MasteryCard(
 				"能独立说明「" + target + "」的触发入口、执行链路、失效条件和定位入口，才算可收口。",
 				List.of(
@@ -1197,11 +1304,11 @@ public class ReviewSessionService {
 						"不要只背「" + target + "」的概念名，必须讲清触发条件",
 						"边界条件要能解释为什么结论会翻转",
 						"排查表达要落到可观察现象、配置检查或调用入口"),
-				"要求说明 " + target + " 的核心链路、失效边界和排查步骤。");
+				"围绕 " + target + " 的核心链路、失效边界和排查步骤继续考察，可换成机制解释题、边界判断题或生产排查题。");
 	}
 
 	private static String localReferenceAnswer(ReviewSession session) {
-		return "两分钟回答建议：围绕「" + taskTitle(session.getTask()) + "」先给结论，再按核心机制、边界场景、生产排查和工程取舍展开。";
+		return "两分钟回答建议：围绕「" + sessionTitle(session) + "」先给结论，再按核心机制、边界场景、生产排查和工程取舍展开。";
 	}
 
 	private static BigDecimal localScore(String answer) {
@@ -1223,6 +1330,17 @@ public class ReviewSessionService {
 		};
 	}
 
+	private static ReviewAttemptResult attemptResult(BigDecimal score) {
+		BigDecimal normalized = score == null ? BigDecimal.ZERO : score;
+		if (normalized.compareTo(BigDecimal.valueOf(3)) < 0) {
+			return ReviewAttemptResult.POOR;
+		}
+		if (normalized.compareTo(BigDecimal.valueOf(4.2)) < 0) {
+			return ReviewAttemptResult.PARTIAL;
+		}
+		return ReviewAttemptResult.GOOD;
+	}
+
 	private static Instant nextReviewAt(ReviewPointStatus status, Instant now) {
 		return switch (status) {
 			case UNSTABLE -> now.plus(1, ChronoUnit.DAYS);
@@ -1234,21 +1352,43 @@ public class ReviewSessionService {
 		};
 	}
 
-	private String generateInitialQuestion(User user, ReviewTask task) {
+	private static String reviewIntervalLabel(ReviewPointStatus status) {
+		return switch (status) {
+			case UNSTABLE -> "明天复习";
+			case FIRST_PASS -> "3 天后复习";
+			case DUE -> "7 天后复习";
+			case STABLE -> "14 天后复习";
+			case LONG_TERM -> "30 天后复习";
+			case UNCOVERED -> "明天复习";
+		};
+	}
+
+	private static String reviewIntervalReason(ReviewPointStatus status) {
+		return switch (status) {
+			case UNSTABLE -> "本题暴露关键薄弱点或掌握不稳定，需要短间隔复验。";
+			case FIRST_PASS -> "本题已初步掌握，但还没有稳定，需要 3 天后确认能否保持。";
+			case DUE -> "本题仍需按期复验，暂按 7 天间隔进入后续计划。";
+			case STABLE -> "本题掌握稳定，进入 14 天巩固复习。";
+			case LONG_TERM -> "本题已接近长期掌握，进入 30 天长期复习。";
+			case UNCOVERED -> "本题仍按未覆盖处理，明天优先复验。";
+		};
+	}
+
+	private String generateInitialQuestion(User user, ReviewPoint point) {
 		UserSettings settings = settingsService.findOrDefault(user);
-		LlmResult result = llmClient.complete(settings, questionSystemPrompt(), questionPrompt(task));
+		LlmResult result = llmClient.complete(settings, questionSystemPrompt(), questionPrompt(point));
 		if (result.content() != null && !result.content().isBlank()) {
 			return result.content().trim();
 		}
 		throw new IllegalStateException("AI 题目生成失败：" + (result.errorMessage() == null ? "LLM 未返回有效题目。" : result.errorMessage()));
 	}
 
-	private static String taskTitle(ReviewTask task) {
-		return task.getReviewPoint() == null ? task.getManualPrompt() : task.getReviewPoint().getTitle();
+	private static String sessionTitle(ReviewSession session) {
+		return session.getReviewUnit().getTitle();
 	}
 
 	private static String reviewSystemPrompt() {
-		return "你是严格的高级 Java 面试官。必须只输出 JSON，不要输出 Markdown。根据用户回答判断继续追问还是收口评分。";
+		return "你是严格的高级 Java 面试官。必须只输出 JSON，不要输出 Markdown。根据用户回答判断继续追问还是收口评价。";
 	}
 
 	private static String noAnswerSystemPrompt() {
@@ -1259,11 +1399,7 @@ public class ReviewSessionService {
 		return "你是严格的高级 Java 面试官。根据复习点实时生成一道题，只输出题目本身，不输出参考答案、评分标准或解释。题目必须具体、可回答、能暴露机制理解和生产经验。";
 	}
 
-	private static String questionPrompt(ReviewTask task) {
-		ReviewPoint point = task.getReviewPoint();
-		if (point == null) {
-			return "手动复习任务：" + task.getManualPrompt() + "\n请生成一道严格面试复习题。";
-		}
+	private static String questionPrompt(ReviewPoint point) {
 		return "主题：" + point.getTopic().getTitle()
 				+ "\n复习点：" + point.getTitle()
 				+ "\n重要度：" + point.getImportance()
@@ -1272,7 +1408,7 @@ public class ReviewSessionService {
 				+ "\n当前掌握分：" + point.getMastery()
 				+ "\n当前状态：" + point.getStatus()
 				+ "\n历史弱点：" + (point.getWeakPoints().isEmpty() ? "暂无" : String.join("；", point.getWeakPoints()))
-				+ "\n下一次探针：" + (point.getNextProbe() == null || point.getNextProbe().isBlank() ? "暂无" : point.getNextProbe())
+				+ "\n下次考察方向：" + (point.getNextProbe() == null || point.getNextProbe().isBlank() ? "暂无" : point.getNextProbe())
 				+ "\n请生成一道针对这个复习点的实时面试题。";
 	}
 
@@ -1301,31 +1437,31 @@ public class ReviewSessionService {
 				输出 JSON，字段如下：
 				{
 				  "action": "follow_up 或 evaluate",
-				  "followUpQuestion": "当 action=follow_up 时给出一个针对缺失证据的追问；否则为 null",
+				  "followUpQuestion": "当 action=follow_up 时给出一个针对缺失证据的追问；否则为 null。追问不能泄露完整正确答案",
 				  "weakSignals": [
 				    {"category": "missing_mechanism|missing_boundary|missing_production|concept_confusion|expression_gap|other", "label": "薄弱点短句", "evidence": "引用用户回答里的证据", "severity": 1到5}
 				  ],
 				  "evaluation": {
-				    "overallComment": "收口评价",
+				    "overallComment": "本题判定：一句话说明掌握程度、答对了什么、主要错漏是什么",
 				    "correctPoints": ["答对的点"],
 				    "missingPoints": ["遗漏点"],
 				    "inaccuratePoints": ["不准确点"],
 				    "corrections": [
 				      {"userIssue": "用户具体答错或漏掉了什么", "correctAnswer": "对应的正确说法，必须能直接教会用户", "explanation": "为什么这个点影响本题判断"}
 				    ],
-				    "referenceAnswer": "简洁的两分钟参考回答",
+				    "referenceAnswer": "追问完成后的简洁两分钟参考回答；要能直接教会用户正确答法",
 				    "score": {"conclusionAccuracy": 0到5, "mechanismExplanation": 0到5, "boundaryCases": 0到5, "transferApplication": 0到5, "overall": 0到5},
 				    "weakSignals": [
 				      {"category": "missing_mechanism", "label": "薄弱点短句", "evidence": "证据", "severity": 1到5}
 				    ],
 				    "weakPoints": ["薄弱点短句"],
-				    "nextProbe": "下次复验要问的探针问题",
+				    "nextProbe": "下次考察方向：只描述要继续验证的机制、边界或场景类型，不要写成固定题目",
 				    "nextStatus": "unstable|first_pass|due|stable|long_term",
 				    "masteryCard": {
-				      "oneSentence": "一句话掌握",
-				      "answerSkeleton": ["回答骨架"],
-				      "mustRemember": ["必须记住的关键点"],
-				      "nextProbe": "下次复验探针"
+				      "oneSentence": "复习记录的一句话结论，不重复 referenceAnswer",
+				      "answerSkeleton": ["可复述的回答骨架，保留关键步骤，不重复纠错明细"],
+				      "mustRemember": ["必须记住的薄弱点或边界事实"],
+				      "nextProbe": "下次考察方向：只描述验证方向，可用原问题，也可换成场景题、对比题或排查题"
 				    }
 				  }
 				}
@@ -1333,14 +1469,16 @@ public class ReviewSessionService {
 				判定规则：
 				1. 如果关键机制、边界场景或生产排查证据缺失，且未达到最多追问次数，action 必须为 follow_up。
 				2. followUpQuestion 只能问一个具体缺口，不能泄露参考答案。
-				3. 如果可以收口或已达到最多追问次数，action 必须为 evaluate，并填写 evaluation。
+				3. 如果可以收口或已达到最多追问次数，action 必须为 evaluate，并填写 evaluation；此时才给 corrections 和 referenceAnswer。
 				4. 不要因为用户回答字数长就判定掌握，必须看机制、边界和生产经验。
 				5. 如果用户回答“不清楚、不会、不知道、没思路”等明确无法作答，不要继续追问，action 必须为 evaluate，给低分、薄弱点和 masteryCard。
 				6. 不要重复历史对话中已经问过的追问；如果没有新的具体缺口可以问，action 必须为 evaluate。
 				7. 当 action=evaluate 且 overall < 4.8，或 missingPoints/inaccuratePoints/weakSignals 任一非空，corrections 必须非空。
 				8. corrections 必须逐条对应用户的错误点或遗漏点：userIssue 写用户哪里错/漏，correctAnswer 直接给正确说法，explanation 解释为什么这样才对。除非用户接近完美且没有缺口，否则不能只给 referenceAnswer。
+				9. 最终展示会压成三块：本题判定、纠错与正确答案、复习记录。不要在 overallComment、corrections、referenceAnswer、masteryCard 中反复输出同一句话。
+				10. nextProbe 和 masteryCard.nextProbe 必须是“考察方向”，不能是固定下次追问题目，不能以“请/为什么/如何/说明”开头。
 				""".formatted(
-						taskTitle(session.getTask()),
+						sessionTitle(session),
 						followUpCount,
 						maxFollowUps,
 						transcript(turns),
@@ -1349,7 +1487,7 @@ public class ReviewSessionService {
 
 	private static String noAnswerPrompt(ReviewSession session, String evidence, List<ReviewTurn> turns) {
 		return """
-				用户在当前复习点明确表示不会作答。请直接生成一次低分收口复盘，用于前端展示“复习掌握卡”和“详细复盘”。
+				用户在当前复习点明确表示不会作答。请直接生成一次低分收口复盘，用于前端展示“本题判定、纠错与正确答案、复习记录”。
 
 				复习点：%s
 				用户证据：%s
@@ -1358,37 +1496,38 @@ public class ReviewSessionService {
 
 				只输出下面这个 ReviewEvaluation JSON，不要包在其他字段里：
 				{
-				  "overallComment": "一句明确判断：本题没有形成有效作答，指出应先补哪条主链路",
+				  "overallComment": "本题判定：没有形成有效作答，指出应先补哪条主链路",
 				  "correctPoints": [],
 				  "missingPoints": ["具体缺口 1", "具体缺口 2", "具体缺口 3"],
 				  "inaccuratePoints": [],
 				  "corrections": [
 				    {"userIssue": "用户没有回答出的具体缺口", "correctAnswer": "这个缺口对应的正确说法", "explanation": "为什么必须这样回答"}
 				  ],
-				  "referenceAnswer": "围绕本复习点的两分钟参考回答，必须具体到机制、边界和排查入口",
+				  "referenceAnswer": "追问结束后的两分钟参考回答，必须具体到机制、边界和排查入口",
 				  "score": {"conclusionAccuracy": 0到2, "mechanismExplanation": 0到2, "boundaryCases": 0到2, "transferApplication": 0到2, "overall": 0到2},
 				  "weakSignals": [
 				    {"category": "unknown|missing_mechanism|missing_boundary|missing_production", "label": "具体薄弱点", "evidence": "必须引用用户证据", "severity": 4到5}
 				  ],
 				  "weakPoints": ["具体薄弱点"],
-				  "nextProbe": "下次只追问一个可判断是否补上的具体问题",
+				  "nextProbe": "下次考察方向：只描述要继续验证的机制、边界或场景类型，不要写成固定题目",
 				  "nextStatus": "unstable",
 				  "masteryCard": {
-				    "oneSentence": "一句话说明这个复习点真正要掌握的判断条件或核心链路",
+				    "oneSentence": "复习记录的一句话结论：说明这个复习点真正要掌握的判断条件或核心链路",
 				    "answerSkeleton": ["具体回答步骤，不要只写结论/机制/边界/排查", "具体回答步骤", "具体回答步骤"],
 				    "mustRemember": ["必须记住的机制事实或边界事实", "必须记住的排查入口或反例"],
-				    "nextProbe": "与 nextProbe 一致或更具体的下次复验问题"
+				    "nextProbe": "与 nextProbe 一致的下次考察方向，可用原题、场景题、对比题或排查题验证"
 				  }
 				}
 
 				生成要求：
 				1. correctPoints 必须是空数组，因为用户没有形成有效作答。
 				2. missingPoints 必须写“没有说出什么机制/边界/排查入口”，不能写“回答不完整”这种空话。
-				3. masteryCard 不能使用“结论、机制、边界、排查”作为单独条目，必须写成可背诵、可复述、可追问的具体内容。
+				3. masteryCard 不能使用“结论、机制、边界、排查”作为单独条目，必须写成可背诵、可复述、可考察的具体内容。
 				4. weakSignals 的 evidence 必须包含用户证据原文。
 				5. 所有分数必须在 0 到 2 之间，nextStatus 必须是 unstable。
 				6. corrections 必须非空，每个条目都要把用户没答出的缺口和正确说法配对，不能只说“参考 referenceAnswer”。
-				""".formatted(taskTitle(session.getTask()), evidence, transcript(turns));
+				7. nextProbe 和 masteryCard.nextProbe 必须是考察方向，不是固定下次追问题目，不能以“请/为什么/如何/说明”开头。
+				""".formatted(sessionTitle(session), evidence, transcript(turns));
 	}
 
 	private static String clarifyPrompt(ReviewSession session, String question) {
@@ -1402,7 +1541,7 @@ public class ReviewSessionService {
 				3. 推荐回答顺序。
 
 				不要给标准答案，不要展开具体结论。
-				""".formatted(taskTitle(session.getTask()), question);
+				""".formatted(sessionTitle(session), question);
 	}
 
 	private static String transcript(List<ReviewTurn> turns) {

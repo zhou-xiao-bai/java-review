@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.javareview.common.ResourceNotFoundException;
+import com.javareview.reviewpoint.AutoPlanTier;
 import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointRepository;
 import com.javareview.reviewpoint.ReviewPointStatus;
@@ -36,11 +37,11 @@ public class TopicService {
 
 	private static final BigDecimal ZERO_MASTERY = BigDecimal.ZERO.setScale(2);
 	private static final List<PointTemplate> DEFAULT_TEMPLATES = List.of(
-			new PointTemplate("%s 核心机制与调用链路", 4, 3, 4),
-			new PointTemplate("%s 高频面试边界", 5, 4, 5),
-			new PointTemplate("%s 生产故障排查", 5, 4, 4),
-			new PointTemplate("%s 对比取舍与反例", 4, 4, 4),
-			new PointTemplate("%s 两分钟表达结构", 3, 3, 5));
+			PointTemplate.core("%s 核心机制与调用链路", 4, 3, 4),
+			PointTemplate.core("%s 高频面试边界", 5, 4, 5),
+			PointTemplate.core("%s 生产故障排查", 5, 4, 4),
+			PointTemplate.expand("%s 对比取舍与反例", 4, 4, 4),
+			PointTemplate.optional("%s 两分钟表达结构", 3, 3, 5));
 	private static final Map<String, List<PointTemplate>> BUILTIN_DOMAIN_TEMPLATES = Map.ofEntries(
 			Map.entry("java-foundation", List.of(
 					new PointTemplate("%s API 语义与常见误用", 4, 3, 5),
@@ -241,7 +242,8 @@ public class TopicService {
 				TopicSource.MANUAL,
 				true));
 		initializePoints(topic);
-		return toTopicSummary(topic, reviewPointRepository.findByTopicId(topic.getId()));
+		List<ReviewPoint> points = reviewPointRepository.findByTopicId(topic.getId());
+		return toTopicSummary(topic, points);
 	}
 
 	@Transactional
@@ -251,7 +253,8 @@ public class TopicService {
 		if (Boolean.TRUE.equals(request.selected())) {
 			initializePoints(topic);
 		}
-		return toTopicSummary(topic, reviewPointRepository.findByTopicId(topic.getId()));
+		List<ReviewPoint> points = reviewPointRepository.findByTopicId(topic.getId());
+		return toTopicSummary(topic, points);
 	}
 
 	@Transactional
@@ -282,7 +285,8 @@ public class TopicService {
 		topic.updatePlanning(
 				request.relevanceTier(),
 				Boolean.TRUE.equals(request.planEnabled()),
-				request.interviewValue());
+				request.interviewValue(),
+				request.newExpansionLimit());
 		return toTopicSummary(topic, reviewPointRepository.findByTopicId(topic.getId()));
 	}
 
@@ -290,7 +294,8 @@ public class TopicService {
 	public TopicSummaryResponse initializePoints(UUID topicId) {
 		Topic topic = requireTopic(topicId);
 		initializePoints(topic);
-		return toTopicSummary(topic, reviewPointRepository.findByTopicId(topic.getId()));
+		List<ReviewPoint> points = reviewPointRepository.findByTopicId(topic.getId());
+		return toTopicSummary(topic, points);
 	}
 
 	private Topic requireTopic(UUID topicId) {
@@ -340,6 +345,7 @@ public class TopicService {
 				topic.getRelevanceTier().name(),
 				topic.isPlanEnabled(),
 				topic.getInterviewValue(),
+				topic.getNewExpansionLimit(),
 				points.size(),
 				aggregate.coveredCount(),
 				aggregate.averageMastery(),
@@ -424,7 +430,28 @@ public class TopicService {
 			List<String> weakPointSummary) {
 	}
 
-	private record PointTemplate(String title, int importance, int difficulty, int interviewFrequency) {
+	private record PointTemplate(
+			String title,
+			int importance,
+			int difficulty,
+			int interviewFrequency,
+			AutoPlanTier autoPlanTier) {
+
+		PointTemplate(String title, int importance, int difficulty, int interviewFrequency) {
+			this(title, importance, difficulty, interviewFrequency, inferredTier(title, importance, interviewFrequency));
+		}
+
+		static PointTemplate core(String title, int importance, int difficulty, int interviewFrequency) {
+			return new PointTemplate(title, importance, difficulty, interviewFrequency, AutoPlanTier.CORE);
+		}
+
+		static PointTemplate expand(String title, int importance, int difficulty, int interviewFrequency) {
+			return new PointTemplate(title, importance, difficulty, interviewFrequency, AutoPlanTier.EXPAND);
+		}
+
+		static PointTemplate optional(String title, int importance, int difficulty, int interviewFrequency) {
+			return new PointTemplate(title, importance, difficulty, interviewFrequency, AutoPlanTier.OPTIONAL);
+		}
 
 		ReviewPoint toReviewPoint(Topic topic) {
 			String resolvedTitle = resolvedTitle(topic);
@@ -434,11 +461,22 @@ public class TopicService {
 					importance,
 					difficulty,
 					interviewFrequency,
+					autoPlanTier,
 					"围绕「" + resolvedTitle + "」追问机制、边界和生产排查。");
 		}
 
 		String resolvedTitle(Topic topic) {
 			return title.contains("%s") ? title.formatted(topic.getTitle()) : title;
+		}
+
+		private static AutoPlanTier inferredTier(String title, int importance, int interviewFrequency) {
+			if (importance <= 3 || title.contains("面试表达闭环") || title.contains("两分钟表达结构")) {
+				return AutoPlanTier.OPTIONAL;
+			}
+			if (importance >= 5 && interviewFrequency >= 5) {
+				return AutoPlanTier.CORE;
+			}
+			return AutoPlanTier.EXPAND;
 		}
 	}
 }

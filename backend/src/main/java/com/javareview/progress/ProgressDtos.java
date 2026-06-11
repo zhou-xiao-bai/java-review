@@ -82,7 +82,6 @@ public final class ProgressDtos {
 			UUID sessionId,
 			String topicTitle,
 			String pointTitle,
-			String manualPrompt,
 			String status,
 			BigDecimal finalScore,
 			Instant startedAt,
@@ -103,7 +102,7 @@ public final class ProgressDtos {
 	}
 
 	public record ReviewPlanItemResponse(
-			UUID taskId,
+			UUID reviewUnitStateId,
 			UUID reviewPointId,
 			String source,
 			String type,
@@ -114,7 +113,6 @@ public final class ProgressDtos {
 			String domainName,
 			String topicTitle,
 			String pointTitle,
-			String manualPrompt,
 			int estimatedMinutes,
 			Instant nextReviewAt,
 			String dueStatus) {

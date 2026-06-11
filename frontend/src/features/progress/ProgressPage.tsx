@@ -36,12 +36,9 @@ const progressTabs = [
 ] as const
 
 const planGroups = [
-  { key: 'carry_over', label: '顺延未完成' },
   { key: 'overdue', label: '逾期复验' },
   { key: 'due', label: '到期复验' },
-  { key: 'new', label: '范围新拓展' },
-  { key: 'manual', label: '今日加练' },
-  { key: 'estimated', label: '预计到期，未生成' },
+  { key: 'pending_first_review', label: '待首考' },
   { key: 'other', label: '其他计划' },
 ] as const
 
@@ -192,7 +189,7 @@ export function ProgressPage() {
           </Panel>
           <Panel title="近期复习记录">
             {(recentQuery.data ?? []).slice(0, 8).map((item) => (
-              <ListItem key={item.sessionId} title={item.pointTitle ?? item.manualPrompt ?? '今日加练'} meta={`${statusLabel(item.status)} / ${item.finalScore ?? '-'} 分`} />
+              <ListItem key={item.sessionId} title={item.pointTitle ?? '复习单元'} meta={`${statusLabel(item.status)} / ${item.finalScore ?? '-'} 分`} />
             ))}
           </Panel>
         </aside>
@@ -536,17 +533,14 @@ function ReviewPlanDateButton({
         {day.itemCount} 项 / {day.estimatedMinutes} 分
       </span>
       <span className="mt-2 flex flex-wrap gap-1">
-        {summary.carryOver > 0 ? (
-          <DateMiniPill selected={selected} label={`顺 ${summary.carryOver}`} />
-        ) : null}
         {summary.overdue > 0 ? (
           <DateMiniPill selected={selected} label={`逾 ${summary.overdue}`} />
         ) : null}
         {summary.due > 0 ? (
           <DateMiniPill selected={selected} label={`到 ${summary.due}`} />
         ) : null}
-        {summary.estimated > 0 ? (
-          <DateMiniPill selected={selected} label={`预 ${summary.estimated}`} />
+        {summary.pendingFirstReview > 0 ? (
+          <DateMiniPill selected={selected} label={`首 ${summary.pendingFirstReview}`} />
         ) : null}
         {day.itemCount === 0 ? (
           <DateMiniPill selected={selected} label="空" />
@@ -586,9 +580,8 @@ function ReviewPlanSelectedDay({ day }: { day: ReviewPlanDay }) {
           </div>
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
-          <PlanSummaryPill label="已生成" value={summary.generated} />
-          <PlanSummaryPill label="预计" value={summary.estimated} />
-          <PlanSummaryPill label="顺延" value={summary.carryOver} />
+          <PlanSummaryPill label="复习轨道" value={summary.total} />
+          <PlanSummaryPill label="待首考" value={summary.pendingFirstReview} />
           <PlanSummaryPill label="逾期" value={summary.overdue} />
           <PlanSummaryPill label="到期" value={summary.due} />
         </div>
@@ -648,7 +641,7 @@ function ReviewPlanItemGroup({
       <div className="space-y-2">
         {group.items.map((item) => (
           <ReviewPlanItemRow
-            key={item.taskId ?? `${date}-${item.reviewPointId}-${group.key}`}
+            key={item.reviewUnitStateId ?? `${date}-${item.reviewPointId}-${group.key}`}
             item={item}
           />
         ))}
@@ -673,26 +666,24 @@ function ReviewPlanItemRow({ item }: { item: ReviewPlanItem }) {
           <span
             className={cn(
               'rounded px-1.5 py-0.5 text-xs font-medium',
-              item.source === 'generated_task'
+              item.source === 'review_unit_state'
                 ? 'bg-emerald-50 text-emerald-700'
                 : 'bg-amber-50 text-amber-700',
             )}
           >
-            {item.source === 'generated_task' ? '已生成' : '预计到期'}
+            {item.source === 'review_unit_state' ? '复习轨道' : '计划项'}
           </span>
         </div>
         <div className="mt-1 line-clamp-2 text-sm leading-6 text-slate-600">
-          {item.pointTitle ?? item.manualPrompt}
+          {item.pointTitle}
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2 md:justify-end">
         <span
           className={cn(
             'rounded px-2 py-1 text-xs font-medium',
-            item.type === 'carry_over' && 'bg-amber-50 text-amber-700',
             item.type === 'due' && 'bg-rose-50 text-rose-700',
-            item.type === 'new' && 'bg-emerald-50 text-emerald-700',
-            item.type === 'manual' && 'bg-slate-100 text-slate-600',
+            item.type === 'pending_first_review' && 'bg-emerald-50 text-emerald-700',
           )}
         >
           {item.planReason}
@@ -711,10 +702,9 @@ function ReviewPlanItemRow({ item }: { item: ReviewPlanItem }) {
 
 function summarizePlanItems(items: ReviewPlanItem[]) {
   return {
-    carryOver: items.filter((item) => item.source === 'generated_task' && item.type === 'carry_over').length,
-    due: items.filter((item) => item.source === 'generated_task' && item.type === 'due' && item.planReason !== '逾期复验').length,
-    estimated: items.filter((item) => item.source !== 'generated_task').length,
-    generated: items.filter((item) => item.source === 'generated_task').length,
+    total: items.length,
+    due: items.filter((item) => item.type === 'due' && item.planReason !== '逾期复验').length,
+    pendingFirstReview: items.filter((item) => item.type === 'pending_first_review').length,
     overdue: items.filter((item) => item.planReason === '逾期复验').length,
   }
 }
@@ -736,22 +726,16 @@ function groupPlanItems(items: ReviewPlanItem[]) {
 }
 
 function planGroupKey(item: ReviewPlanItem): PlanGroupKey {
-  if (item.source !== 'generated_task') return 'estimated'
-  if (item.type === 'carry_over') return 'carry_over'
   if (item.type === 'due' && item.planReason === '逾期复验') return 'overdue'
   if (item.type === 'due') return 'due'
-  if (item.type === 'new') return 'new'
-  if (item.type === 'manual') return 'manual'
+  if (item.type === 'pending_first_review') return 'pending_first_review'
   return 'other'
 }
 
 function planGroupTone(key: PlanGroupKey) {
-  if (key === 'carry_over') return 'bg-amber-50 text-amber-700'
   if (key === 'overdue') return 'bg-rose-100 text-rose-800'
   if (key === 'due') return 'bg-rose-50 text-rose-700'
-  if (key === 'new') return 'bg-emerald-50 text-emerald-700'
-  if (key === 'manual') return 'bg-slate-100 text-slate-600'
-  if (key === 'estimated') return 'bg-blue-50 text-blue-700'
+  if (key === 'pending_first_review') return 'bg-emerald-50 text-emerald-700'
   return 'bg-slate-100 text-slate-600'
 }
 

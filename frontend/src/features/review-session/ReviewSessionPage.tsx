@@ -7,16 +7,17 @@ import {
   answerReviewSession,
   clarifyReviewSession,
   getApiErrorMessage,
-  getToday,
+  getTodayQueue,
   skipReviewSession,
   startReviewSession,
   unknownReviewSession,
+  type ReviewPlanExplanation,
   type ReviewSession,
-  type ReviewTask,
+  type TodayQueueItem,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-const todayQueryKey = ['today'] as const
+const todayQueueQueryKey = ['today-queue'] as const
 type SessionMode = 'manual' | 'immersive'
 
 export function ReviewSessionPage() {
@@ -24,43 +25,58 @@ export function ReviewSessionPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [session, setSession] = useState<ReviewSession | null>(null)
-  const [pendingTask, setPendingTask] = useState<ReviewTask | null>(null)
+  const [selectedItem, setSelectedItem] = useState<TodayQueueItem | null>(null)
+  const [pendingItem, setPendingItem] = useState<TodayQueueItem | null>(null)
   const [answer, setAnswer] = useState('')
   const [clarifyText, setClarifyText] = useState('')
   const [pendingAnswerPreview, setPendingAnswerPreview] = useState<string | null>(null)
   const [pendingClarifyPreview, setPendingClarifyPreview] = useState<string | null>(null)
-  const autoStartedTaskIdRef = useRef<string | null>(null)
+  const [immersiveQueueSnapshotIds, setImmersiveQueueSnapshotIds] = useState<string[]>([])
+  const autoStartedStateIdRef = useRef<string | null>(null)
   const transcriptEndRef = useRef<HTMLDivElement | null>(null)
-  const todayQuery = useQuery({ queryKey: todayQueryKey, queryFn: () => getToday() })
-  const tasks = useMemo(
-    () => todayQuery.data?.groups.flatMap((group) => group.tasks) ?? [],
-    [todayQuery.data],
+  const queueQuery = useQuery({
+    queryKey: todayQueueQueryKey,
+    queryFn: getTodayQueue,
+  })
+  const items = useMemo(
+    () => queueQuery.data?.groups.flatMap((group) => group.items) ?? [],
+    [queueQuery.data],
   )
-  const activeTasks = useMemo(() => tasks.filter(isStartableTask), [tasks])
-  const currentTaskId = session?.taskId ?? pendingTask?.id ?? null
-  const currentTaskIndex = currentTaskId
-    ? tasks.findIndex((task) => task.id === currentTaskId)
-    : -1
-  const handledTaskCount = tasks.filter((task) => !isStartableTask(task)).length
-  const progressPosition = currentTaskIndex >= 0
-    ? currentTaskIndex + 1
-    : Math.min(tasks.length, handledTaskCount + (activeTasks.length > 0 ? 1 : 0))
-  const progressPercent = tasks.length > 0
-    ? Math.round((Math.max(handledTaskCount, progressPosition - 1) / tasks.length) * 100)
-    : 0
+  const activeItems = items
   const mode: SessionMode = searchParams.get('mode') === 'immersive' ? 'immersive' : 'manual'
+  const currentStateId = session?.reviewUnitStateId ?? pendingItem?.stateId ?? selectedItem?.stateId ?? null
+  const snapshotActiveCount = immersiveQueueSnapshotIds.filter((stateId) =>
+    items.some((item) => item.stateId === stateId),
+  ).length
+  const immersiveTotal = immersiveQueueSnapshotIds.length > 0
+    ? immersiveQueueSnapshotIds.length
+    : items.length
+  const handledItemCount = immersiveTotal > 0
+    ? Math.max(0, immersiveTotal - snapshotActiveCount)
+    : 0
+  const progressPosition = Math.min(
+    immersiveTotal,
+    handledItemCount + (currentStateId || activeItems.length > 0 ? 1 : 0),
+  )
+  const progressPercent = immersiveTotal > 0
+    ? Math.round((handledItemCount / immersiveTotal) * 100)
+    : 0
+  const requestedStateId = searchParams.get('stateId')
   const hasNextTask = session
-    ? activeTasks.some((task) => task.id !== session.taskId)
-    : activeTasks.length > 0
+    ? activeItems.some((item) => item.stateId !== session.reviewUnitStateId)
+    : activeItems.length > 0
 
   const startMutation = useMutation({
-    mutationFn: (task: ReviewTask) => startReviewSession(task.id),
+    mutationFn: (item: TodayQueueItem) => startReviewSession(item.stateId),
     onSuccess: async (nextSession) => {
       setSession(nextSession)
-      setPendingTask(null)
-      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+      setPendingItem(null)
+      await queryClient.invalidateQueries({ queryKey: todayQueueQueryKey })
     },
-    onError: () => setPendingTask(null),
+    onError: (_error, item) => {
+      setPendingItem(null)
+      setSelectedItem(item)
+    },
   })
   const answerMutation = useMutation({
     mutationFn: ({ id, value }: { id: string; value: string }) => answerReviewSession(id, value),
@@ -68,7 +84,7 @@ export function ReviewSessionPage() {
       setSession(nextSession)
       setAnswer('')
       setPendingAnswerPreview(null)
-      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+      await queryClient.invalidateQueries({ queryKey: todayQueueQueryKey })
     },
     onError: () => setPendingAnswerPreview(null),
   })
@@ -76,7 +92,7 @@ export function ReviewSessionPage() {
     mutationFn: unknownReviewSession,
     onSuccess: async (nextSession) => {
       setSession(nextSession)
-      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+      await queryClient.invalidateQueries({ queryKey: todayQueueQueryKey })
     },
   })
   const clarifyMutation = useMutation({
@@ -92,7 +108,7 @@ export function ReviewSessionPage() {
     mutationFn: skipReviewSession,
     onSuccess: async (nextSession) => {
       setSession(nextSession)
-      await queryClient.invalidateQueries({ queryKey: todayQueryKey })
+      await queryClient.invalidateQueries({ queryKey: todayQueueQueryKey })
     },
   })
   const actionPending =
@@ -107,38 +123,96 @@ export function ReviewSessionPage() {
     getApiErrorMessage(unknownMutation.error, '') ||
     getApiErrorMessage(clarifyMutation.error, '') ||
     getApiErrorMessage(skipMutation.error, '') ||
-    (todayQuery.isError ? getApiErrorMessage(todayQuery.error) : '')
+    (queueQuery.isError ? getApiErrorMessage(queueQuery.error) : '')
 
-  const startTask = useCallback((task: ReviewTask) => {
+  const startItem = useCallback((item: TodayQueueItem) => {
     setSession(null)
-    setPendingTask(task)
-    startMutation.mutate(task)
+    setSelectedItem(null)
+    setPendingItem(item)
+    startMutation.mutate(item)
   }, [startMutation])
+
+  const selectItem = useCallback((
+    item: TodayQueueItem,
+    syncUrl = true,
+  ) => {
+    setSession(null)
+    setPendingItem(null)
+    setSelectedItem(item)
+    if (syncUrl) {
+      setSearchParams({ stateId: item.stateId })
+    }
+  }, [setSearchParams])
+
+  useEffect(() => {
+    if (mode === 'immersive' || immersiveQueueSnapshotIds.length === 0) {
+      return
+    }
+    const timeoutId = window.setTimeout(() => setImmersiveQueueSnapshotIds([]), 0)
+    return () => window.clearTimeout(timeoutId)
+  }, [immersiveQueueSnapshotIds.length, mode])
 
   useEffect(() => {
     if (
       mode !== 'immersive' ||
-      todayQuery.isLoading ||
+      queueQuery.isLoading ||
       startMutation.isPending ||
       session ||
-      pendingTask
+      pendingItem ||
+      selectedItem
     ) {
       return
     }
-    const next = activeTasks[0]
-    if (next && next.id !== autoStartedTaskIdRef.current) {
-      autoStartedTaskIdRef.current = next.id
-      const timeoutId = window.setTimeout(() => startTask(next), 0)
+    const next = pickRandomItem(activeItems, autoStartedStateIdRef.current)
+    if (next && next.stateId !== autoStartedStateIdRef.current) {
+      autoStartedStateIdRef.current = next.stateId
+      const snapshotIds = immersiveQueueSnapshotIds.length === 0
+        ? activeItems.map((item) => item.stateId)
+        : null
+      const timeoutId = window.setTimeout(() => {
+        if (snapshotIds) {
+          setImmersiveQueueSnapshotIds(snapshotIds)
+        }
+        startItem(next)
+      }, 0)
       return () => window.clearTimeout(timeoutId)
     }
   }, [
-    activeTasks,
+    activeItems,
+    immersiveQueueSnapshotIds.length,
     mode,
-    pendingTask,
+    pendingItem,
+    selectedItem,
     session,
-    startTask,
+    startItem,
     startMutation.isPending,
-    todayQuery.isLoading,
+    queueQuery.isLoading,
+  ])
+
+  useEffect(() => {
+    if (
+      !requestedStateId ||
+      queueQuery.isLoading ||
+      startMutation.isPending ||
+      session ||
+      pendingItem
+    ) {
+      return
+    }
+    const requestedItem = activeItems.find((item) => item.stateId === requestedStateId)
+    if (requestedItem && selectedItem?.stateId !== requestedItem.stateId) {
+      const timeoutId = window.setTimeout(() => selectItem(requestedItem, false), 0)
+      return () => window.clearTimeout(timeoutId)
+    }
+  }, [
+    activeItems,
+    pendingItem,
+    queueQuery.isLoading,
+    requestedStateId,
+    selectedItem?.stateId,
+    selectItem,
+    session,
+    startMutation.isPending,
   ])
 
   useEffect(() => {
@@ -147,7 +221,8 @@ export function ReviewSessionPage() {
     session?.turns.length,
     pendingAnswerPreview,
     pendingClarifyPreview,
-    pendingTask,
+    pendingItem,
+    selectedItem,
     startMutation.isPending,
   ])
 
@@ -168,28 +243,33 @@ export function ReviewSessionPage() {
   }
 
   function startNextTask() {
-    const currentIndex = session
-      ? tasks.findIndex((task) => task.id === session.taskId)
-      : -1
-    const nextAfterCurrent = currentIndex >= 0
-      ? tasks.slice(currentIndex + 1).find(isStartableTask)
-      : undefined
-    const next = nextAfterCurrent ??
-      activeTasks.find((task) => task.id !== session?.taskId) ??
-      activeTasks[0]
-    if (next) startTask(next)
+    const next = pickRandomItem(activeItems, session?.reviewUnitStateId)
+    if (!next) {
+      return
+    }
+    if (mode === 'immersive') {
+      startItem(next)
+    } else {
+      selectItem(next)
+    }
   }
 
   function enterImmersiveMode() {
     setSearchParams({ mode: 'immersive' })
-    if (!session && !pendingTask && activeTasks[0]) {
-      autoStartedTaskIdRef.current = activeTasks[0].id
-      startTask(activeTasks[0])
+    setSelectedItem(null)
+    if (items.length > 0 && immersiveQueueSnapshotIds.length === 0) {
+      setImmersiveQueueSnapshotIds(items.map((item) => item.stateId))
+    }
+    const next = pickRandomItem(activeItems)
+    if (!session && !pendingItem && next) {
+      autoStartedStateIdRef.current = next.stateId
+      startItem(next)
     }
   }
 
   function exitImmersiveMode() {
-    autoStartedTaskIdRef.current = null
+    autoStartedStateIdRef.current = null
+    setImmersiveQueueSnapshotIds([])
     setSearchParams({})
   }
 
@@ -199,7 +279,7 @@ export function ReviewSessionPage() {
         <div>
           <h1 className="text-3xl font-semibold text-slate-950">复习会话</h1>
           <div className="mt-1 text-sm text-slate-500">
-            {mode === 'immersive' ? '沉浸式推进今日队列' : '手动选择今日任务'}
+            {mode === 'immersive' ? '沉浸式随机抽取今日队列' : '手动选择今日任务'}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -252,19 +332,19 @@ export function ReviewSessionPage() {
           <aside className="h-fit rounded-lg border border-slate-200 bg-white shadow-sm xl:sticky xl:top-24">
             <div className="border-b border-slate-200 px-4 py-3">
               <h2 className="text-sm font-semibold text-slate-950">今日队列</h2>
-              <div className="mt-1 text-xs text-slate-500">{activeTasks.length} 个待复习任务</div>
+              <div className="mt-1 text-xs text-slate-500">{activeItems.length} 个待复习单元</div>
             </div>
             <div className="max-h-[620px] divide-y divide-slate-100 overflow-auto">
-              {tasks.length === 0 ? (
-                <div className="p-4 text-sm text-slate-500">暂无今日任务。</div>
+              {items.length === 0 ? (
+                <div className="p-4 text-sm text-slate-500">暂无今日复习单元。</div>
               ) : (
-                tasks.map((task) => (
-                  <TaskButton
-                    key={task.id}
-                    active={session?.taskId === task.id || pendingTask?.id === task.id}
-                    disabled={startMutation.isPending || !isStartableTask(task)}
-                    task={task}
-                    onStart={() => startTask(task)}
+                items.map((item) => (
+                  <QueueItemButton
+                    key={item.stateId}
+                    active={currentStateId === item.stateId}
+                    disabled={startMutation.isPending}
+                    item={item}
+                    onStart={() => selectItem(item)}
                   />
                 ))
               )}
@@ -275,40 +355,43 @@ export function ReviewSessionPage() {
         <main className="space-y-4">
           {mode === 'immersive' ? (
             <ImmersiveProgress
-              activeCount={activeTasks.length}
-              handledCount={handledTaskCount}
+              activeCount={snapshotActiveCount}
+              handledCount={handledItemCount}
               onExit={exitImmersiveMode}
               percent={progressPercent}
               position={progressPosition}
-              total={tasks.length}
+              total={immersiveTotal}
             />
           ) : null}
 
-          {!session && !pendingTask ? (
+          {!session && !pendingItem && !selectedItem ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
               <div>
-                {todayQuery.isLoading
+                {queueQuery.isLoading
                   ? '正在加载今日队列...'
-                  : tasks.length === 0
-                    ? '暂无今日任务，请先返回今日计划补齐队列。'
-                    : activeTasks.length === 0
-                      ? '今日任务已完成或跳过。'
+                  : items.length === 0
+                    ? '暂无今日复习单元。'
+                    : activeItems.length === 0
+                      ? '今日复习单元已处理。'
                       : mode === 'immersive'
-                        ? '正在准备第一道题。'
-                        : '请选择一个今日任务开始严格面试复习。'}
+                        ? '正在随机准备第一道题。'
+                        : '请选择一个复习单元开始严格面试复习。'}
               </div>
-              {mode === 'immersive' && activeTasks.length > 0 ? (
+              {mode === 'immersive' && activeItems.length > 0 ? (
                 <button
                   className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-emerald-700 px-3 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
                   type="button"
                   disabled={startMutation.isPending}
-                  onClick={() => startTask(activeTasks[0])}
+                  onClick={() => {
+                    const next = pickRandomItem(activeItems)
+                    if (next) startItem(next)
+                  }}
                 >
                   {startMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
                   开始沉浸式复习
                 </button>
               ) : null}
-              {todayQuery.isLoading ? null : tasks.length === 0 || activeTasks.length === 0 ? (
+              {queueQuery.isLoading ? null : items.length === 0 || activeItems.length === 0 ? (
                 <button
                   className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800"
                   type="button"
@@ -324,50 +407,61 @@ export function ReviewSessionPage() {
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <div className="text-xs font-medium text-slate-500">{session?.topicTitle ?? pendingTask?.topicTitle ?? '今日加练'}</div>
+                    <div className="text-xs font-medium text-slate-500">{session?.topicTitle ?? pendingItem?.scopeTitle ?? selectedItem?.scopeTitle}</div>
                     <h2 className="mt-1 text-xl font-semibold text-slate-950">
-                      {session?.pointTitle ?? session?.manualPrompt ?? pendingTask?.pointTitle ?? pendingTask?.manualPrompt}
+                      {session?.pointTitle ?? pendingItem?.unitTitle ?? selectedItem?.unitTitle}
                     </h2>
                   </div>
-                  <StatusTag status={session?.status ?? 'generating'} />
+                  <StatusTag status={session?.status ?? (pendingItem ? 'generating' : 'ready')} />
                 </div>
               </section>
 
-              <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div className="border-b border-slate-200 px-5 py-3 text-sm font-semibold text-slate-950">
-                  对话记录
-                </div>
-                <div className="space-y-3 p-5">
-                  {pendingTask && startMutation.isPending ? (
-                    <AssistantThinking text="正在生成针对当前复习点的题目" />
-                  ) : null}
-                  {session?.turns
-                    .filter((turn) => turn.turnType !== 'evaluation')
-                    .map((turn) => <TurnCard key={turn.id} turn={turn} />)}
-                  {pendingAnswerPreview ? (
-                    <>
-                      <PendingUserTurn content={pendingAnswerPreview} type="回答" />
-                      <AssistantThinking text="正在拆解你的回答，判断要追问还是收口评分" />
-                    </>
-                  ) : null}
-                  {pendingClarifyPreview ? (
-                    <>
-                      <PendingUserTurn content={pendingClarifyPreview} type="澄清" />
-                      <AssistantThinking text="正在解释题意和回答维度，不展开标准答案" />
-                    </>
-                  ) : null}
-                  {unknownMutation.isPending ? (
-                    <>
-                      <PendingUserTurn content="不会" type="不会" />
-                      <AssistantThinking text="正在收口评分，并生成可复习的掌握卡" />
-                    </>
-                  ) : null}
-                  {skipMutation.isPending ? (
-                    <PendingUserTurn content="跳过本题" type="跳过" />
-                  ) : null}
-                  <div ref={transcriptEndRef} />
-                </div>
-              </section>
+              {selectedItem && !pendingItem && !session ? (
+                <StartConfirmationPanel
+                  item={selectedItem}
+                  loading={startMutation.isPending}
+                  onBack={() => navigate('/today')}
+                  onStart={() => startItem(selectedItem)}
+                />
+              ) : null}
+
+              {session || pendingItem ? (
+                <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-200 px-5 py-3 text-sm font-semibold text-slate-950">
+                    对话记录
+                  </div>
+                  <div className="space-y-3 p-5">
+                    {pendingItem && startMutation.isPending ? (
+                      <AssistantThinking text="正在生成针对当前复习点的题目" />
+                    ) : null}
+                    {session?.turns
+                      .filter((turn) => turn.turnType !== 'evaluation')
+                      .map((turn) => <TurnCard key={turn.id} turn={turn} />)}
+                    {pendingAnswerPreview ? (
+                      <>
+                        <PendingUserTurn content={pendingAnswerPreview} type="回答" />
+                        <AssistantThinking text="正在拆解你的回答，判断要追问还是收口评价" />
+                      </>
+                    ) : null}
+                    {pendingClarifyPreview ? (
+                      <>
+                        <PendingUserTurn content={pendingClarifyPreview} type="澄清" />
+                        <AssistantThinking text="正在解释题意和回答维度，不展开标准答案" />
+                      </>
+                    ) : null}
+                    {unknownMutation.isPending ? (
+                      <>
+                        <PendingUserTurn content="不会" type="不会" />
+                        <AssistantThinking text="正在收口评价，并生成复习记录" />
+                      </>
+                    ) : null}
+                    {skipMutation.isPending ? (
+                      <PendingUserTurn content="跳过本题" type="跳过" />
+                    ) : null}
+                    <div ref={transcriptEndRef} />
+                  </div>
+                </section>
+              ) : null}
 
               {session?.status === 'active' ? (
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -427,7 +521,17 @@ export function ReviewSessionPage() {
   )
 }
 
-function TaskButton({ active, disabled, task, onStart }: { active: boolean; disabled: boolean; task: ReviewTask; onStart: () => void }) {
+function QueueItemButton({
+  active,
+  disabled,
+  item,
+  onStart,
+}: {
+  active: boolean
+  disabled: boolean
+  item: TodayQueueItem
+  onStart: () => void
+}) {
   return (
     <button
       className={cn('block w-full px-4 py-3 text-left transition', active ? 'bg-emerald-50' : 'hover:bg-slate-50', disabled ? 'opacity-60' : '')}
@@ -436,16 +540,103 @@ function TaskButton({ active, disabled, task, onStart }: { active: boolean; disa
       onClick={onStart}
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="truncate text-sm font-medium text-slate-950">{task.pointTitle ?? task.manualPrompt}</span>
-        <span className="shrink-0 text-xs text-slate-500">{task.estimatedMinutes}m</span>
+        <span className="truncate text-sm font-medium text-slate-950">{item.unitTitle}</span>
+        <span className="shrink-0 text-xs text-slate-500">{item.reasonLabel}</span>
       </div>
       <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-        <span>{task.typeLabel}</span>
+        <span>{item.scopeTitle}</span>
         <span>/</span>
-        <span>{task.statusLabel}</span>
+        <span>{item.domainName}</span>
       </div>
     </button>
   )
+}
+
+function StartConfirmationPanel({
+  item,
+  loading,
+  onBack,
+  onStart,
+}: {
+  item: TodayQueueItem
+  loading: boolean
+  onBack: () => void
+  onStart: () => void
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-950">确认复习单元</div>
+          <div className="mt-2 text-sm leading-6 text-slate-600">
+            {item.scopeTitle} / {item.domainName}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <ReviewUnitMeta label="队列原因" value={item.reasonLabel} />
+            <ReviewUnitMeta label="重要度" value={String(item.importance)} />
+            <ReviewUnitMeta label="难度" value={String(item.difficulty)} />
+            <ReviewUnitMeta label="频率" value={String(item.interviewFrequency)} />
+            <ReviewUnitMeta label="上次结果" value={reviewResultLabel(item.lastResult) || '无'} />
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <button
+            type="button"
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={loading}
+            onClick={onBack}
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            返回今日计划
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+            disabled={loading}
+            onClick={onStart}
+          >
+            {loading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Play className="size-4" aria-hidden="true" />}
+            {loading ? '正在生成' : '生成题目'}
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ReviewUnitMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="rounded-md bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600">
+      {label} {value}
+    </span>
+  )
+}
+
+function reviewResultLabel(value: string | null) {
+  if (!value) {
+    return ''
+  }
+  const labels: Record<string, string> = {
+    GOOD: '好',
+    PARTIAL: '一般',
+    POOR: '差',
+    SELF_MASTERED: '自评掌握',
+  }
+  return labels[value] ?? value
+}
+
+function pickRandomItem(
+  items: TodayQueueItem[],
+  excludedStateId?: string | null,
+) {
+  const candidates = excludedStateId
+    ? items.filter((item) => item.stateId !== excludedStateId)
+    : items
+  const pool = candidates.length > 0 ? candidates : items
+  if (pool.length === 0) {
+    return null
+  }
+  return pool[Math.floor(Math.random() * pool.length)]
 }
 
 function ImmersiveProgress({
@@ -498,7 +689,16 @@ function ImmersiveProgress({
 }
 
 function StatusTag({ status }: { status: string }) {
-  const label = status === 'generating' ? '生成中' : status === 'evaluated' ? '已收口' : status === 'abandoned' ? '已跳过' : '进行中'
+  const label =
+    status === 'ready'
+      ? '待确认'
+      : status === 'generating'
+        ? '生成中'
+        : status === 'evaluated'
+          ? '已收口'
+          : status === 'abandoned'
+            ? '已跳过'
+            : '进行中'
   return <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{label}</span>
 }
 
@@ -719,59 +919,35 @@ function EvaluationPanel({
   session: ReviewSession
 }) {
   const evaluation = session.evaluation
-  const weakSignals = evaluation?.weakSignals ?? []
-  const problemItems = evaluation ? answerProblemItems(evaluation) : []
   const corrections = compactCorrections(evaluation?.corrections ?? [])
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
           <CheckCircle2 className="size-4 text-emerald-600" />
-          收口评分
+          收口评价
         </div>
         <NextTaskButton disabled={!hasNext} label={hasNext ? nextLabel : '今日队列已完成'} onClick={onNext} />
       </div>
       {evaluation ? (
         <div className="mt-4 space-y-4">
-          <div className="grid gap-3 sm:grid-cols-5">
-            <Score label="结论" value={evaluation.score.conclusionAccuracy} />
-            <Score label="机制" value={evaluation.score.mechanismExplanation} />
-            <Score label="边界" value={evaluation.score.boundaryCases} />
-            <Score label="迁移" value={evaluation.score.transferApplication} />
-            <Score label="总分" value={evaluation.score.overall} strong />
-          </div>
           <div className="rounded-md bg-slate-50 px-3 py-3">
             <div className="text-xs font-medium text-slate-500">本题判断</div>
             <div className="mt-1 text-sm font-semibold text-slate-950">{nextStatusLabel(evaluation.nextStatus)}</div>
             <div className="mt-2 text-sm leading-6 text-slate-700">{evaluation.overallComment}</div>
           </div>
-          <CorrectionList corrections={corrections} />
-          <div className="grid gap-3 lg:grid-cols-2">
-            <DiagnosticList title="你答到了" values={evaluation.correctPoints} empty="这次回答没有形成明确可确认的正确点。" tone="good" />
-            <DiagnosticList title="这次回答缺口" values={problemItems} empty="没有明显缺口，后续按下次探针复验。" tone="warning" />
-          </div>
-          <WeakSignalList signals={weakSignals.slice(0, 3)} title="本次薄弱证据" compact />
+          <CorrectionList corrections={corrections} referenceAnswer={evaluation.referenceAnswer} />
           {evaluation.masteryCard ? (
             <div>
-              <div className="text-sm font-semibold text-slate-950">复习掌握卡</div>
+              <div className="text-sm font-semibold text-slate-950">复习记录</div>
               <div className="mt-2 space-y-3 rounded-md bg-emerald-50 px-3 py-3 text-sm text-emerald-950">
                 <div className="font-medium">{evaluation.masteryCard.oneSentence}</div>
-                <DiagnosticList title="回答骨架" values={evaluation.masteryCard.answerSkeleton} tone="plain" />
-                <DiagnosticList title="必须记住" values={evaluation.masteryCard.mustRemember} tone="plain" />
-                <TextBlock title="下次探针" value={evaluation.masteryCard.nextProbe} />
+                <DiagnosticList title="薄弱点与关键记忆" values={evaluation.masteryCard.mustRemember} tone="plain" />
+                <TextBlock title="复习计划" value={reviewPlanText(evaluation.nextStatus, evaluation.masteryCard.nextProbe, session.nextReviewAt)} />
+                <PlanExplanation explanation={session.reviewPlanExplanation} />
               </div>
             </div>
           ) : null}
-          <details className="rounded-md border border-slate-200 bg-white px-3 py-3">
-            <summary className="cursor-pointer text-sm font-semibold text-slate-950">详细复盘</summary>
-            <div className="mt-3 space-y-4">
-              <ListBlock title="遗漏点" values={evaluation.missingPoints} />
-              <ListBlock title="不准确点" values={evaluation.inaccuratePoints} />
-              <ListBlock title="薄弱点" values={evaluation.weakPoints} />
-              <TextBlock title="两分钟参考回答" value={evaluation.referenceAnswer} />
-              <WeakSignalList signals={weakSignals} title="完整薄弱证据" />
-            </div>
-          </details>
         </div>
       ) : (
         <div className="mt-3 text-sm text-slate-500">本题已跳过，未更新掌握度。</div>
@@ -788,15 +964,6 @@ function NextTaskButton({ disabled, label, onClick }: { disabled: boolean; label
   )
 }
 
-function Score({ label, value, strong = false }: { label: string; value: number; strong?: boolean }) {
-  return (
-    <div className="rounded-md bg-slate-50 px-3 py-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className={cn('mt-1 text-lg font-semibold', strong ? 'text-emerald-700' : 'text-slate-950')}>{value.toFixed(1)}</div>
-    </div>
-  )
-}
-
 function TextBlock({ title, value }: { title: string; value: string }) {
   return (
     <div>
@@ -806,39 +973,44 @@ function TextBlock({ title, value }: { title: string; value: string }) {
   )
 }
 
-function ListBlock({ title, values }: { title: string; values: string[] }) {
-  return <TextBlock title={title} value={values.length > 0 ? values.join(' / ') : '无'} />
-}
-
 type CorrectionItem = {
   userIssue: string
   correctAnswer: string
   explanation?: string | null
 }
 
-function CorrectionList({ corrections }: { corrections: CorrectionItem[] }) {
-  if (corrections.length === 0) {
+function CorrectionList({ corrections, referenceAnswer }: { corrections: CorrectionItem[]; referenceAnswer: string }) {
+  const answer = referenceAnswer.trim()
+  if (corrections.length === 0 && !answer) {
     return null
   }
   return (
     <div className="rounded-md bg-amber-50 px-3 py-3 text-sm text-amber-950">
       <div className="flex items-center gap-2 font-semibold">
         <AlertCircle className="size-4" aria-hidden="true" />
-        针对性纠错
+        纠错与正确答案
       </div>
-      <div className="mt-3 divide-y divide-amber-100">
-        {corrections.map((correction, index) => (
-          <div key={`${correction.userIssue}-${index}`} className="py-3 first:pt-0 last:pb-0">
-            <div className="text-xs font-semibold text-amber-700">问题</div>
-            <div className="mt-1 leading-6">{correction.userIssue}</div>
-            <div className="mt-2 text-xs font-semibold text-emerald-700">正确说法</div>
-            <div className="mt-1 leading-6 text-slate-900">{correction.correctAnswer}</div>
-            {correction.explanation ? (
-              <div className="mt-2 leading-6 text-amber-900">{correction.explanation}</div>
-            ) : null}
-          </div>
-        ))}
-      </div>
+      {corrections.length > 0 ? (
+        <div className="mt-3 divide-y divide-amber-100">
+          {corrections.map((correction, index) => (
+            <div key={`${correction.userIssue}-${index}`} className="py-3 first:pt-0 last:pb-0">
+              <div className="text-xs font-semibold text-amber-700">问题</div>
+              <div className="mt-1 leading-6">{correction.userIssue}</div>
+              <div className="mt-2 text-xs font-semibold text-emerald-700">正确说法</div>
+              <div className="mt-1 leading-6 text-slate-900">{correction.correctAnswer}</div>
+              {correction.explanation ? (
+                <div className="mt-2 leading-6 text-amber-900">{correction.explanation}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {answer ? (
+        <div className="mt-3 rounded-md bg-white/70 px-3 py-3">
+          <div className="text-xs font-semibold text-emerald-700">完整答法</div>
+          <div className="mt-1 leading-6 text-slate-900">{answer}</div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -871,45 +1043,38 @@ function DiagnosticList({
   )
 }
 
-function WeakSignalList({
-  compact = false,
-  signals,
-  title,
-}: {
-  compact?: boolean
-  signals: NonNullable<ReviewSession['evaluation']>['weakSignals']
-  title: string
-}) {
-  const items = signals ?? []
-  if (items.length === 0) {
+function PlanExplanation({ explanation }: { explanation: ReviewPlanExplanation | null }) {
+  if (!explanation) {
     return null
   }
+  const factors = explanation.priorityFactors.filter((factor) => factor.key !== 'overdue' || factor.contribution !== 0)
   return (
-    <div>
-      <div className="text-sm font-semibold text-slate-950">{title}</div>
-      <div className="mt-2 divide-y divide-slate-100 rounded-md bg-slate-50">
-        {items.map((signal, index) => (
-          <div key={`${signal.label}-${index}`} className="px-3 py-2 text-sm">
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-medium text-slate-900">{signal.label}</span>
-              <span className="shrink-0 rounded bg-white px-2 py-0.5 text-xs text-slate-500">
-                严重度 {signal.severity}
-              </span>
-            </div>
-            {signal.evidence ? (
-              <div className="mt-1 text-xs leading-5 text-slate-500">{compact ? truncateText(signal.evidence) : signal.evidence}</div>
-            ) : null}
-          </div>
-        ))}
+    <div className="rounded-md bg-white/70 px-3 py-3 text-sm text-slate-800">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div className="font-semibold text-slate-950">计划依据</div>
+        <div className="text-xs font-medium text-emerald-700">优先级 {formatPlanScore(explanation.priorityScore)}</div>
       </div>
+      <div className="mt-2 text-xs leading-5 text-slate-600">
+        {explanation.scheduleRule}
+        {explanation.nextReviewAtText ? ` · ${explanation.nextReviewAtText}` : ''}。{explanation.scheduleReason}
+      </div>
+      {factors.length > 0 ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {factors.map((factor) => (
+            <div key={factor.key} className="rounded-md border border-emerald-100 bg-white px-2.5 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-slate-700">{factor.label}</div>
+                <div className="shrink-0 text-xs font-medium text-slate-500">
+                  {factor.value} / {formatContribution(factor.contribution)}
+                </div>
+              </div>
+              <div className="mt-1 text-xs leading-5 text-slate-500">{factor.description}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
-}
-
-function answerProblemItems(evaluation: NonNullable<ReviewSession['evaluation']>) {
-  const inaccuratePoints = evaluation.inaccuratePoints.map((value) => `不准确：${value}`)
-  const directProblems = compactValues([...evaluation.missingPoints, ...inaccuratePoints])
-  return directProblems.length > 0 ? directProblems : evaluation.weakPoints
 }
 
 function compactCorrections(corrections: CorrectionItem[]) {
@@ -933,9 +1098,16 @@ function compactValues(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)))
 }
 
-function truncateText(value: string, maxLength = 140) {
-  const normalized = value.replace(/\s+/g, ' ').trim()
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized
+function formatPlanScore(value: number) {
+  return Number.isFinite(value) ? value.toFixed(2) : '-'
+}
+
+function formatContribution(value: number) {
+  if (!Number.isFinite(value)) return '-'
+  const formatted = Math.abs(value).toFixed(2)
+  if (value > 0) return `+${formatted}`
+  if (value < 0) return `-${formatted}`
+  return '0.00'
 }
 
 function nextStatusLabel(status: string) {
@@ -949,6 +1121,27 @@ function nextStatusLabel(status: string) {
   return labels[status] ?? status
 }
 
-function isStartableTask(task: ReviewTask) {
-  return task.status === 'pending' || task.status === 'in_progress'
+function reviewPlanText(status: string, direction: string, nextReviewAt: string | null) {
+  const intervals: Record<string, string> = {
+    due: '后续会按到期复验进入复习计划。',
+    first_pass: '约 3 天后进入复习计划。',
+    long_term: '约 30 天后进入长期复习计划。',
+    stable: '约 14 天后进入巩固复习计划。',
+    unstable: '明天优先进入复习计划。',
+  }
+  const date = formatNextReviewDate(nextReviewAt)
+  const schedule = date ? `${date} 进入复习计划。` : (intervals[status] ?? '后续会按掌握情况进入复习计划。')
+  const focus = direction.trim()
+  return focus ? `${schedule}考察方向：${focus}` : schedule
+}
+
+function formatNextReviewDate(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleDateString('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  })
 }

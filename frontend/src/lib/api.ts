@@ -143,6 +143,7 @@ export type TopicSummary = {
   relevanceTier: 'CORE' | 'PROJECT' | 'SUPPLEMENT' | 'ARCHIVED' | string
   planEnabled: boolean
   interviewValue: number
+  newExpansionLimit: number
   reviewPointCount: number
   coveredReviewPointCount: number
   averageMastery: number
@@ -213,6 +214,7 @@ export function updateTopicPlanning(
     relevanceTier: TopicSummary['relevanceTier']
     planEnabled: boolean
     interviewValue: number
+    newExpansionLimit: number
   },
 ) {
   return apiRequest<TopicSummary>(`/api/topics/${id}/planning`, {
@@ -227,112 +229,103 @@ export function initializeTopicPoints(id: string) {
   })
 }
 
-export type SummaryMetric = {
-  count: number
-  minutes: number
-}
-
-export type TodaySummary = {
-  carryOver: SummaryMetric
-  due: SummaryMetric
-  newExpansion: SummaryMetric
-  manual: SummaryMetric
-}
-
-export type ReviewTask = {
-  id: string
-  reviewPointId: string | null
-  topicId: string | null
-  topicTitle: string | null
-  domainName: string | null
-  pointTitle: string | null
-  manualPrompt: string | null
-  date: string
-  type: 'carry_over' | 'due' | 'new' | 'manual' | string
-  typeLabel: string
-  planReason: string
-  status: 'pending' | 'in_progress' | 'completed' | 'skipped' | string
-  statusLabel: string
-  priorityScore: number
-  estimatedMinutes: number
-  dueStatus: string
+export type ReviewUnitSummary = {
+  reviewUnitId: string
+  title: string
+  importance: number
+  difficulty: number
+  interviewFrequency: number
+  autoPlanTier: 'CORE' | 'EXPAND' | 'OPTIONAL' | string
+  mastery: number
+  pointStatus: string
+  stateId: string | null
+  stateStatus: 'PENDING_FIRST_REVIEW' | 'ACTIVE' | 'ARCHIVED' | 'NOT_FOR_ME' | string | null
+  admittedAt: string | null
+  firstReviewedAt: string | null
+  lastReviewedAt: string | null
   nextReviewAt: string | null
-  createdAt: string | null
-  completedAt: string | null
-  removedAt: string | null
+  lastResult: 'POOR' | 'PARTIAL' | 'GOOD' | 'SELF_MASTERED' | string | null
+  consecutiveSuccessCount: number
+  consecutiveFailureCount: number
+  weakPoints: string[]
+  nextProbe: string | null
 }
 
-export type ReviewTaskGroup = {
-  type: ReviewTask['type']
+export type ReviewUnitsResponse = {
+  topicId: string
+  topicTitle: string
+  domainName: string
+  totalCount: number
+  admittedCount: number
+  pendingFirstReviewCount: number
+  activeCount: number
+  units: ReviewUnitSummary[]
+}
+
+export function getTopicReviewUnits(topicId: string) {
+  return apiRequest<ReviewUnitsResponse>(`/api/topics/${topicId}/review-units`)
+}
+
+export function admitTopicReviewUnits(topicId: string, reviewUnitIds?: string[]) {
+  return apiRequest<ReviewUnitsResponse>(`/api/topics/${topicId}/review-units/admit`, {
+    method: 'POST',
+    body: reviewUnitIds?.length ? { reviewUnitIds } : {},
+  })
+}
+
+export type TodayQueueItem = {
+  reviewUnitId: string
+  stateId: string
+  scopeId: string
+  scopeTitle: string
+  domainName: string
+  unitTitle: string
+  status: string
+  reason: 'overdue' | 'due_today' | 'manual_add' | 'pending_first_review' | string
+  reasonLabel: string
+  importance: number
+  difficulty: number
+  interviewFrequency: number
+  nextReviewAt: string | null
+  admittedAt: string | null
+  lastReviewedAt: string | null
+  lastResult: string | null
+  consecutiveSuccessCount: number
+  consecutiveFailureCount: number
+}
+
+export type TodayQueueGroup = {
+  reason: TodayQueueItem['reason']
   label: string
   count: number
-  scheduledMinutes: number
-  tasks: ReviewTask[]
+  items: TodayQueueItem[]
 }
 
-export type TodayPlan = {
+export type TodayQueue = {
   date: string
-  capacityMinutes: number
-  scheduledMinutes: number
-  completedMinutes: number
-  remainingMinutes: number
-  summary: TodaySummary
-  groups: ReviewTaskGroup[]
+  groups: TodayQueueGroup[]
 }
 
-export type CreateManualTaskRequest = {
-  prompt: string
-  estimatedMinutes?: number
+export function getTodayQueue() {
+  return apiRequest<TodayQueue>('/api/today/queue')
 }
 
-export function getToday(date?: string) {
-  const params = new URLSearchParams()
-  if (date) params.set('date', date)
-  const query = params.toString()
-  return apiRequest<TodayPlan>(`/api/today${query ? `?${query}` : ''}`)
+export type TodayActionType =
+  | 'DISMISS_TODAY'
+  | 'MANUAL_ADD'
+  | 'POSTPONE'
+  | 'SELF_MASTERED'
+
+export type TodayActionRequest = {
+  reviewUnitStateId: string
+  actionType: TodayActionType
+  postponeUntil?: string | null
 }
 
-export function generateToday() {
-  return apiRequest<TodayPlan>('/api/today/generate', {
-    method: 'POST',
-  })
-}
-
-export function regenerateToday() {
-  return apiRequest<TodayPlan>('/api/today/regenerate', {
-    method: 'POST',
-  })
-}
-
-export function createManualTask(body: CreateManualTaskRequest) {
-  return apiRequest<ReviewTask>('/api/today/manual-tasks', {
+export function applyTodayAction(body: TodayActionRequest) {
+  return apiRequest<TodayQueue>('/api/today/actions', {
     method: 'POST',
     body,
-  })
-}
-
-export function skipReviewTask(id: string) {
-  return apiRequest<ReviewTask>(`/api/review-tasks/${id}/skip`, {
-    method: 'PATCH',
-  })
-}
-
-export function unskipReviewTask(id: string) {
-  return apiRequest<ReviewTask>(`/api/review-tasks/${id}/unskip`, {
-    method: 'PATCH',
-  })
-}
-
-export function removeReviewTask(id: string) {
-  return apiRequest<TodayPlan>(`/api/review-tasks/${id}`, {
-    method: 'DELETE',
-  })
-}
-
-export function removeReviewTasks(taskIds: string[]) {
-  return apiRequest<TodayPlan>('/api/review-tasks/batch-remove', {
-    method: 'POST',
-    body: { taskIds },
   })
 }
 
@@ -346,7 +339,6 @@ export type SettingsResponse = {
   llmConfigs: LlmConfigResponse[]
   requestTimeoutSeconds: number
   dailyReviewMinutes: number
-  reviewedPointSchedulingPolicy: ReviewedPointSchedulingPolicy
 }
 
 export type LlmConfigResponse = {
@@ -364,13 +356,7 @@ export type UpdateSettingsRequest = {
   llmConfigs: LlmConfigRequest[]
   requestTimeoutSeconds: number
   dailyReviewMinutes: number
-  reviewedPointSchedulingPolicy: ReviewedPointSchedulingPolicy
 }
-
-export type ReviewedPointSchedulingPolicy =
-  | 'follow_scope'
-  | 'keep_reviewed'
-  | string
 
 export type LlmConfigRequest = {
   id: string
@@ -448,25 +434,41 @@ export type ReviewTurn = {
   createdAt: string | null
 }
 
+export type ReviewPlanExplanation = {
+  scheduleRule: string
+  scheduleReason: string
+  nextReviewAtText: string | null
+  priorityScore: number
+  priorityFactors: {
+    key: string
+    label: string
+    value: string
+    contribution: number
+    description: string
+  }[]
+}
+
 export type ReviewSession = {
   id: string
-  taskId: string
+  reviewUnitStateId: string
+  reviewUnitId: string
   status: 'active' | 'evaluated' | 'abandoned' | string
   topicTitle: string | null
   pointTitle: string | null
-  manualPrompt: string | null
   startedAt: string
   endedAt: string | null
   finalScore: number | null
   summary: string | null
   evaluation: ReviewEvaluation | null
+  nextReviewAt: string | null
+  reviewPlanExplanation: ReviewPlanExplanation | null
   turns: ReviewTurn[]
 }
 
-export function startReviewSession(taskId: string) {
+export function startReviewSession(reviewUnitStateId: string) {
   return apiRequest<ReviewSession>('/api/review-sessions', {
     method: 'POST',
-    body: { taskId },
+    body: { reviewUnitStateId },
   })
 }
 
@@ -571,7 +573,6 @@ export type RecentReviewSession = {
   sessionId: string
   topicTitle: string | null
   pointTitle: string | null
-  manualPrompt: string | null
   status: string
   finalScore: number | null
   startedAt: string
@@ -592,18 +593,17 @@ export type ReviewPlanDay = {
 }
 
 export type ReviewPlanItem = {
-  taskId: string | null
+  reviewUnitStateId: string | null
   reviewPointId: string | null
-  source: 'generated_task' | 'due_point' | string
-  type: 'carry_over' | 'due' | 'new' | 'manual' | string
+  source: 'review_unit_state' | string
+  type: 'due' | 'pending_first_review' | string
   typeLabel: string
   planReason: string
-  status: 'pending' | 'in_progress' | 'completed' | 'skipped' | string
+  status: 'pending' | string
   statusLabel: string
   domainName: string | null
   topicTitle: string | null
   pointTitle: string | null
-  manualPrompt: string | null
   estimatedMinutes: number
   nextReviewAt: string | null
   dueStatus: string

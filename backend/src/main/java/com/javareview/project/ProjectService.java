@@ -146,7 +146,7 @@ public class ProjectService {
 	}
 
 	private static String projectPrompt(ProjectSession session, String answer) {
-		return "项目：" + session.getProjectCase().getName() + "\n回答：" + answer + "\n请追问或收口评分。";
+		return "项目：" + session.getProjectCase().getName() + "\n回答：" + answer + "\n请追问或收口评价。";
 	}
 
 	private static List<String> clean(List<String> values) {

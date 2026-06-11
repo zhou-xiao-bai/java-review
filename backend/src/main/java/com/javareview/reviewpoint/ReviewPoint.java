@@ -46,6 +46,10 @@ public class ReviewPoint {
 	@Column(name = "interview_frequency", nullable = false)
 	private int interviewFrequency;
 
+	@Enumerated(EnumType.STRING)
+	@Column(name = "auto_plan_tier", nullable = false, length = 32)
+	private AutoPlanTier autoPlanTier = AutoPlanTier.CORE;
+
 	@Column(nullable = false, precision = 3, scale = 2)
 	private BigDecimal mastery = BigDecimal.ZERO;
 
@@ -96,12 +100,24 @@ public class ReviewPoint {
 			int difficulty,
 			int interviewFrequency,
 			String nextProbe) {
+		this(topic, title, importance, difficulty, interviewFrequency, AutoPlanTier.CORE, nextProbe);
+	}
+
+	public ReviewPoint(
+			Topic topic,
+			String title,
+			int importance,
+			int difficulty,
+			int interviewFrequency,
+			AutoPlanTier autoPlanTier,
+			String nextProbe) {
 		this.id = UUID.randomUUID();
 		this.topic = topic;
 		this.title = title;
 		this.importance = importance;
 		this.difficulty = difficulty;
 		this.interviewFrequency = interviewFrequency;
+		this.autoPlanTier = autoPlanTier;
 		this.nextProbe = nextProbe;
 	}
 
@@ -139,6 +155,10 @@ public class ReviewPoint {
 
 	public int getInterviewFrequency() {
 		return interviewFrequency;
+	}
+
+	public AutoPlanTier getAutoPlanTier() {
+		return autoPlanTier;
 	}
 
 	public BigDecimal getMastery() {
@@ -194,6 +214,10 @@ public class ReviewPoint {
 		this.wrongCount = wrongCount;
 		this.weakPoints = new ArrayList<>(weakPoints);
 		this.nextProbe = nextProbe;
+	}
+
+	public void postpone(Instant nextReviewAt) {
+		this.nextReviewAt = nextReviewAt;
 	}
 
 	public void updateMasteryCard(MasteryCard masteryCard) {

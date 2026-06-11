@@ -6,13 +6,14 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -36,15 +37,12 @@ import com.javareview.reviewpoint.ReviewPointStatus;
 import com.javareview.reviewpoint.ReviewWeaknessEvent;
 import com.javareview.reviewpoint.ReviewWeaknessEventRepository;
 import com.javareview.reviewpoint.WeaknessEventStatus;
+import com.javareview.reviewunit.UserReviewUnitState;
+import com.javareview.reviewunit.UserReviewUnitStateRepository;
+import com.javareview.reviewunit.UserReviewUnitStatus;
 import com.javareview.reviewsession.ReviewSession;
 import com.javareview.reviewsession.ReviewSessionRepository;
 import com.javareview.reviewsession.ReviewSessionStatus;
-import com.javareview.settings.ReviewedPointSchedulingPolicy;
-import com.javareview.settings.SettingsService;
-import com.javareview.settings.UserSettings;
-import com.javareview.today.ReviewTask;
-import com.javareview.today.ReviewTaskRepository;
-import com.javareview.today.ReviewTaskType;
 import com.javareview.topic.Topic;
 import com.javareview.topic.TopicRepository;
 
@@ -52,13 +50,15 @@ import com.javareview.topic.TopicRepository;
 public class ProgressService {
 
 	private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
+	private static final List<UserReviewUnitStatus> REVIEWABLE_UNIT_STATUSES = List.of(
+			UserReviewUnitStatus.PENDING_FIRST_REVIEW,
+			UserReviewUnitStatus.ACTIVE);
 
 	private final TopicRepository topicRepository;
 	private final ReviewPointRepository reviewPointRepository;
 	private final ReviewWeaknessEventRepository weaknessEventRepository;
 	private final ReviewSessionRepository reviewSessionRepository;
-	private final ReviewTaskRepository reviewTaskRepository;
-	private final SettingsService settingsService;
+	private final UserReviewUnitStateRepository reviewUnitStateRepository;
 	private final Clock clock;
 
 	public ProgressService(
@@ -66,36 +66,34 @@ public class ProgressService {
 			ReviewPointRepository reviewPointRepository,
 			ReviewWeaknessEventRepository weaknessEventRepository,
 			ReviewSessionRepository reviewSessionRepository,
-			ReviewTaskRepository reviewTaskRepository,
-			SettingsService settingsService,
+			UserReviewUnitStateRepository reviewUnitStateRepository,
 			Clock clock) {
 		this.topicRepository = topicRepository;
 		this.reviewPointRepository = reviewPointRepository;
 		this.weaknessEventRepository = weaknessEventRepository;
 		this.reviewSessionRepository = reviewSessionRepository;
-		this.reviewTaskRepository = reviewTaskRepository;
-		this.settingsService = settingsService;
+		this.reviewUnitStateRepository = reviewUnitStateRepository;
 		this.clock = clock;
 	}
 
 	@Transactional(readOnly = true)
 	public ProgressOverviewResponse overview(User user) {
-		ProgressData data = loadData();
+		ProgressData data = loadData(user);
 		return new ProgressOverviewResponse(
 				averageMastery(data.points()),
-				data.topics().size(),
+				data.selectedTopics().size(),
 				data.points().size(),
 				data.points().stream().filter(ProgressService::unstable).count(),
 				duePoints(data.points()).size(),
 				reviewSessionRepository.countByUserIdAndStatus(user.getId(), ReviewSessionStatus.EVALUATED),
 				openWeaknessEvents(data.events()).size(),
 				data.points().stream().filter(ProgressService::highRisk).count(),
-				data.topics().stream().filter(Topic::isAutoPlannable).count());
+				data.selectedTopics().stream().filter(Topic::isAutoPlannable).count());
 	}
 
 	@Transactional(readOnly = true)
-	public List<DomainProgressResponse> domains() {
-		ProgressData data = loadData();
+	public List<DomainProgressResponse> domains(User user) {
+		ProgressData data = loadData(user);
 		Map<UUID, List<ReviewPoint>> pointsByDomain = data.points().stream()
 				.collect(Collectors.groupingBy(point -> point.getTopic().getDomain().getId(), HashMap::new, Collectors.toList()));
 		return data.topics().stream()
@@ -122,8 +120,8 @@ public class ProgressService {
 	}
 
 	@Transactional(readOnly = true)
-	public List<TopicProgressResponse> topics(String status) {
-		ProgressData data = loadData();
+	public List<TopicProgressResponse> topics(User user, String status) {
+		ProgressData data = loadData(user);
 		Map<UUID, List<ReviewPoint>> pointsByTopic = data.points().stream()
 				.collect(Collectors.groupingBy(point -> point.getTopic().getId(), HashMap::new, Collectors.toList()));
 		Map<UUID, List<ReviewWeaknessEvent>> eventsByTopic = data.events().stream()
@@ -139,8 +137,8 @@ public class ProgressService {
 	}
 
 	@Transactional(readOnly = true)
-	public List<WeakPointResponse> weakPoints() {
-		ProgressData data = loadData();
+	public List<WeakPointResponse> weakPoints(User user) {
+		ProgressData data = loadData(user);
 		List<WeakPointResponse> eventResponses = openWeaknessEvents(data.events()).stream()
 				.sorted((left, right) -> {
 					int result = Integer.compare(right.getSeverity(), left.getSeverity());
@@ -183,8 +181,8 @@ public class ProgressService {
 	}
 
 	@Transactional(readOnly = true)
-	public List<DueReviewPointResponse> dueReviewPoints() {
-		return duePoints(loadData().points()).stream()
+	public List<DueReviewPointResponse> dueReviewPoints(User user) {
+		return duePoints(loadData(user).points()).stream()
 				.map(point -> new DueReviewPointResponse(
 						point.getId(),
 						point.getTopic().getTitle(),
@@ -212,34 +210,17 @@ public class ProgressService {
 		LocalDate end = start.plusDays(normalizedDays - 1L);
 		Map<LocalDate, List<ReviewPlanItemResponse>> itemsByDate = new HashMap<>();
 
-		List<ReviewTask> generatedTasks = reviewTaskRepository.findPlanBetween(user.getId(), start, end).stream()
-				.filter(task -> !task.isRemoved())
-				.toList();
-		Set<UUID> generatedPointIds = generatedTasks.stream()
-				.map(ReviewTask::getReviewPoint)
-				.filter(point -> point != null)
-				.map(ReviewPoint::getId)
-				.collect(Collectors.toSet());
-		for (ReviewTask task : generatedTasks) {
-			itemsByDate.computeIfAbsent(task.getTaskDate(), ignored -> new java.util.ArrayList<>())
-					.add(planItem(task));
-		}
-
-		UserSettings settings = settingsService.findOrDefault(user);
-		List<ReviewPoint> duePoints = settings.getReviewedPointSchedulingPolicy() == ReviewedPointSchedulingPolicy.KEEP_REVIEWED
-				? reviewPointRepository.findReviewPlanCalendarPointsIncludingReviewedOutsideScope(endOfDay(end))
-				: reviewPointRepository.findReviewPlanCalendarPoints(endOfDay(end));
-		for (ReviewPoint point : duePoints) {
-			if (generatedPointIds.contains(point.getId())) {
-				continue;
-			}
-			LocalDate dueDate = point.getNextReviewAt().atZone(clock.getZone()).toLocalDate();
-			LocalDate planDate = dueDate.isBefore(start) ? start : dueDate;
+		List<UserReviewUnitState> states = reviewUnitStateRepository.findCalendarCandidates(
+				user.getId(),
+				REVIEWABLE_UNIT_STATUSES,
+				endOfDay(end));
+		for (UserReviewUnitState state : states) {
+			LocalDate planDate = planDate(state, start);
 			if (planDate.isAfter(end)) {
 				continue;
 			}
-			itemsByDate.computeIfAbsent(planDate, ignored -> new java.util.ArrayList<>())
-					.add(planItem(point, planDate));
+			itemsByDate.computeIfAbsent(planDate, ignored -> new ArrayList<>())
+					.add(planItem(state, planDate));
 		}
 
 		List<ReviewPlanDayResponse> dayResponses = IntStream.range(0, normalizedDays)
@@ -258,9 +239,25 @@ public class ProgressService {
 		return new ReviewPlanCalendarResponse(start, end, dayResponses);
 	}
 
-	private ProgressData loadData() {
-		List<Topic> topics = topicRepository.findAllWithDomain().stream()
+	private ProgressData loadData(User user) {
+		List<Topic> selectedTopics = topicRepository.findAllWithDomain().stream()
 				.filter(Topic::isSelected)
+				.toList();
+		List<UserReviewUnitState> userStates = reviewUnitStateRepository.findByUserIdAndStatusInWithUnit(
+				user.getId(),
+				REVIEWABLE_UNIT_STATUSES);
+		Map<UUID, Topic> topicsById = new LinkedHashMap<>();
+		for (Topic topic : selectedTopics) {
+			topicsById.put(topic.getId(), topic);
+		}
+		for (UserReviewUnitState state : userStates) {
+			Topic topic = state.getReviewUnit().getTopic();
+			topicsById.putIfAbsent(topic.getId(), topic);
+		}
+		List<Topic> topics = topicsById.values().stream()
+				.sorted(Comparator
+						.comparing((Topic topic) -> topic.getDomain().getSortOrder())
+						.thenComparing(Topic::getTitle))
 				.toList();
 		List<ReviewPoint> points = topics.isEmpty()
 				? List.of()
@@ -268,7 +265,7 @@ public class ProgressService {
 		List<ReviewWeaknessEvent> events = points.isEmpty()
 				? List.of()
 				: weaknessEventRepository.findByReviewPoint_IdIn(points.stream().map(ReviewPoint::getId).toList());
-		return new ProgressData(topics, points, events);
+		return new ProgressData(selectedTopics, topics, points, events);
 	}
 
 	private TopicProgressResponse topicResponse(Topic topic, List<ReviewPoint> points, List<ReviewWeaknessEvent> events) {
@@ -296,12 +293,11 @@ public class ProgressService {
 	}
 
 	private RecentSessionResponse recentSessionResponse(ReviewSession session) {
-		ReviewPoint point = session.getTask().getReviewPoint();
+		ReviewPoint point = session.getReviewUnit();
 		return new RecentSessionResponse(
 				session.getId(),
-				point == null ? null : point.getTopic().getTitle(),
-				point == null ? null : point.getTitle(),
-				session.getTask().getManualPrompt(),
+				point.getTopic().getTitle(),
+				point.getTitle(),
 				session.getStatus().name().toLowerCase(Locale.ROOT),
 				session.getFinalScore(),
 				session.getStartedAt(),
@@ -386,80 +382,59 @@ public class ProgressService {
 		return "需要复验";
 	}
 
-	private ReviewPlanItemResponse planItem(ReviewTask task) {
-		ReviewPoint point = task.getReviewPoint();
+	private ReviewPlanItemResponse planItem(UserReviewUnitState state, LocalDate planDate) {
+		ReviewPoint point = state.getReviewUnit();
+		String type = state.getStatus() == UserReviewUnitStatus.PENDING_FIRST_REVIEW ? "pending_first_review" : "due";
+		String typeLabel = state.getStatus() == UserReviewUnitStatus.PENDING_FIRST_REVIEW ? "待首考" : "到期复习";
 		return new ReviewPlanItemResponse(
-				task.getId(),
-				point == null ? null : point.getId(),
-				"generated_task",
-				task.getType().apiValue(),
-				task.getType().label(),
-				planReason(task.getTaskDate(), task.getType(), point),
-				task.getStatus().apiValue(),
-				task.getStatus().label(),
-				point == null ? null : point.getTopic().getDomain().getName(),
-				point == null ? null : point.getTopic().getTitle(),
-				point == null ? null : point.getTitle(),
-				task.getManualPrompt(),
-				task.getEstimatedMinutes(),
-				point == null ? null : point.getNextReviewAt(),
-				dueStatus(task.getTaskDate(), task.getType(), point));
-	}
-
-	private ReviewPlanItemResponse planItem(ReviewPoint point, LocalDate planDate) {
-		return new ReviewPlanItemResponse(
-				null,
+				state.getId(),
 				point.getId(),
-				"due_point",
-				"due",
-				"预计到期",
-				planReason(planDate, ReviewTaskType.DUE, point),
+				"review_unit_state",
+				type,
+				typeLabel,
+				planReason(state, planDate),
 				"pending",
-				"待生成",
+				"待复习",
 				point.getTopic().getDomain().getName(),
 				point.getTopic().getTitle(),
 				point.getTitle(),
-				null,
 				10,
-				point.getNextReviewAt(),
-				dueStatus(planDate, ReviewTaskType.DUE, point));
+				state.getNextReviewAt(),
+				dueStatus(state, planDate));
 	}
 
-	private String planReason(LocalDate planDate, ReviewTaskType type, ReviewPoint point) {
-		return switch (type) {
-			case CARRY_OVER -> "顺延未完成";
-			case DUE -> overdueDays(planDate, point) > 0 ? "逾期复验" : "到期复验";
-			case NEW -> "范围新拓展";
-			case MANUAL -> "今日加练";
-		};
+	private String planReason(UserReviewUnitState state, LocalDate planDate) {
+		if (state.getStatus() == UserReviewUnitStatus.PENDING_FIRST_REVIEW) {
+			return "已准入，等待首次考察";
+		}
+		return overdueDays(planDate, state.getNextReviewAt()) > 0 ? "逾期复验" : "到期复验";
 	}
 
-	private String dueStatus(LocalDate planDate, ReviewTaskType type, ReviewPoint point) {
-		if (type == ReviewTaskType.CARRY_OVER) {
-			return "顺延";
+	private String dueStatus(UserReviewUnitState state, LocalDate planDate) {
+		if (state.getStatus() == UserReviewUnitStatus.PENDING_FIRST_REVIEW) {
+			return "待首考";
 		}
-		if (type == ReviewTaskType.NEW) {
-			return "新拓展";
-		}
-		if (type == ReviewTaskType.MANUAL) {
-			return "加练";
-		}
-		if (point == null || point.getNextReviewAt() == null) {
-			return "未排期";
-		}
-		long days = overdueDays(planDate, point);
+		long days = overdueDays(planDate, state.getNextReviewAt());
 		if (days > 0) {
 			return "逾期 " + days + " 天";
 		}
 		return "当日到期";
 	}
 
-	private long overdueDays(LocalDate planDate, ReviewPoint point) {
-		if (point == null || point.getNextReviewAt() == null) {
+	private long overdueDays(LocalDate planDate, Instant nextReviewAt) {
+		if (nextReviewAt == null) {
 			return 0;
 		}
-		LocalDate dueDate = point.getNextReviewAt().atZone(clock.getZone()).toLocalDate();
+		LocalDate dueDate = nextReviewAt.atZone(clock.getZone()).toLocalDate();
 		return java.time.temporal.ChronoUnit.DAYS.between(dueDate, planDate);
+	}
+
+	private LocalDate planDate(UserReviewUnitState state, LocalDate start) {
+		if (state.getNextReviewAt() != null) {
+			LocalDate dueDate = state.getNextReviewAt().atZone(clock.getZone()).toLocalDate();
+			return dueDate.isBefore(start) ? start : dueDate;
+		}
+		return start;
 	}
 
 	private Instant endOfDay(LocalDate date) {
@@ -468,13 +443,16 @@ public class ProgressService {
 
 	private static Comparator<ReviewPlanItemResponse> planItemComparator() {
 		return Comparator
-				.comparingInt((ReviewPlanItemResponse item) -> item.source().equals("generated_task") ? 0 : 1)
-				.thenComparingInt(item -> item.type().equals("carry_over") ? 0 : item.type().equals("due") ? 1 : 2)
+				.comparingInt((ReviewPlanItemResponse item) -> item.type().equals("due") ? 0 : 1)
 				.thenComparing(item -> item.nextReviewAt() == null ? Instant.MAX : item.nextReviewAt())
 				.thenComparing(item -> item.topicTitle() == null ? "" : item.topicTitle())
 				.thenComparing(item -> item.pointTitle() == null ? "" : item.pointTitle());
 	}
 
-	private record ProgressData(List<Topic> topics, List<ReviewPoint> points, List<ReviewWeaknessEvent> events) {
+	private record ProgressData(
+			List<Topic> selectedTopics,
+			List<Topic> topics,
+			List<ReviewPoint> points,
+			List<ReviewWeaknessEvent> events) {
 	}
 }

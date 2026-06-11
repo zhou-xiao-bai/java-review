@@ -19,7 +19,8 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import com.javareview.auth.User;
-import com.javareview.today.ReviewTask;
+import com.javareview.reviewpoint.ReviewPoint;
+import com.javareview.reviewunit.UserReviewUnitState;
 
 @Entity
 @Table(name = "review_sessions")
@@ -33,8 +34,8 @@ public class ReviewSession {
 	private User user;
 
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
-	@JoinColumn(name = "task_id", nullable = false)
-	private ReviewTask task;
+	@JoinColumn(name = "review_unit_state_id", nullable = false)
+	private UserReviewUnitState reviewUnitState;
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 32)
@@ -62,10 +63,10 @@ public class ReviewSession {
 	protected ReviewSession() {
 	}
 
-	public ReviewSession(User user, ReviewTask task, Instant startedAt) {
+	public ReviewSession(User user, UserReviewUnitState reviewUnitState, Instant startedAt) {
 		this.id = UUID.randomUUID();
 		this.user = user;
-		this.task = task;
+		this.reviewUnitState = reviewUnitState;
 		this.startedAt = startedAt;
 	}
 
@@ -82,8 +83,12 @@ public class ReviewSession {
 		return user;
 	}
 
-	public ReviewTask getTask() {
-		return task;
+	public UserReviewUnitState getReviewUnitState() {
+		return reviewUnitState;
+	}
+
+	public ReviewPoint getReviewUnit() {
+		return reviewUnitState.getReviewUnit();
 	}
 
 	public ReviewSessionStatus getStatus() {

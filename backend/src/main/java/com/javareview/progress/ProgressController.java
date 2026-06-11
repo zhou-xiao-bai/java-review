@@ -45,23 +45,28 @@ public class ProgressController {
 	}
 
 	@GetMapping("/domains")
-	public List<DomainProgressResponse> domains() {
-		return progressService.domains();
+	public List<DomainProgressResponse> domains(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal) {
+		return progressService.domains(currentUser(principal));
 	}
 
 	@GetMapping("/topics")
-	public List<TopicProgressResponse> topics(@RequestParam(required = false) String status) {
-		return progressService.topics(status);
+	public List<TopicProgressResponse> topics(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal,
+			@RequestParam(required = false) String status) {
+		return progressService.topics(currentUser(principal), status);
 	}
 
 	@GetMapping("/weak-points")
-	public List<WeakPointResponse> weakPoints() {
-		return progressService.weakPoints();
+	public List<WeakPointResponse> weakPoints(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal) {
+		return progressService.weakPoints(currentUser(principal));
 	}
 
 	@GetMapping("/due-review-points")
-	public List<DueReviewPointResponse> dueReviewPoints() {
-		return progressService.dueReviewPoints();
+	public List<DueReviewPointResponse> dueReviewPoints(
+			@AuthenticationPrincipal org.springframework.security.core.userdetails.User principal) {
+		return progressService.dueReviewPoints(currentUser(principal));
 	}
 
 	@GetMapping("/recent-sessions")

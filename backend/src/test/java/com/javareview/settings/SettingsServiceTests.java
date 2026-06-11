@@ -62,7 +62,7 @@ class SettingsServiceTests {
 		assertThat(response.llmApiKeyMasked()).doesNotContain("secret");
 		assertThat(response.llmConfigs()).hasSize(1);
 		assertThat(response.llmConfigs().getFirst().apiKeyMasked()).isEqualTo("sk-t****alue");
-		assertThat(response.reviewedPointSchedulingPolicy()).isEqualTo("follow_scope");
+		assertThat(response.dailyReviewMinutes()).isEqualTo(60);
 	}
 
 	@Test
@@ -76,8 +76,7 @@ class SettingsServiceTests {
 				"default",
 				List.of(new SettingsDtos.LlmConfigRequest("default", "默认", "openai-compatible", "https://api.example.com/v1", "********", "gpt-next")),
 				40,
-				70,
-				"follow_scope"));
+				70));
 
 		assertThat(settings.getLlmApiKey()).isEqualTo("sk-original");
 		assertThat(settings.getLlmModel()).isEqualTo("gpt-next");
@@ -95,8 +94,7 @@ class SettingsServiceTests {
 						new SettingsDtos.LlmConfigRequest("primary", "主站", "openai-compatible", "https://api.primary.test/v1", "sk-primary", "gpt-a"),
 						new SettingsDtos.LlmConfigRequest("backup", "备用", "openai-compatible", "https://api.backup.test/v1", "sk-backup", "gpt-b")),
 				30,
-				60,
-				"follow_scope"));
+				60));
 
 		assertThat(settings.getActiveLlmConfigId()).isEqualTo("backup");
 		assertThat(settings.getLlmBaseUrl()).isEqualTo("https://api.backup.test/v1");
@@ -105,7 +103,7 @@ class SettingsServiceTests {
 	}
 
 	@Test
-	void reviewedPointSchedulingPolicyCanBeUpdated() {
+	void dailyReviewMinutesCanBeUpdated() {
 		UserSettings settings = new UserSettings(user);
 		when(settingsRepository.findByUserId(user.getId())).thenReturn(Optional.of(settings));
 		when(settingsRepository.save(settings)).thenReturn(settings);
@@ -114,10 +112,9 @@ class SettingsServiceTests {
 				"default",
 				List.of(new SettingsDtos.LlmConfigRequest("default", "默认", "openai-compatible", "https://api.example.com/v1", "", "gpt-test")),
 				30,
-				60,
-				"keep_reviewed"));
+				90));
 
-		assertThat(settings.getReviewedPointSchedulingPolicy()).isEqualTo(ReviewedPointSchedulingPolicy.KEEP_REVIEWED);
-		assertThat(response.reviewedPointSchedulingPolicy()).isEqualTo("keep_reviewed");
+		assertThat(settings.getDailyReviewMinutes()).isEqualTo(90);
+		assertThat(response.dailyReviewMinutes()).isEqualTo(90);
 	}
 }

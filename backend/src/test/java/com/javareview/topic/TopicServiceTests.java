@@ -42,7 +42,10 @@ class TopicServiceTests {
 
 	@BeforeEach
 	void setUp() {
-		topicService = new TopicService(domainRepository, topicRepository, reviewPointRepository);
+		topicService = new TopicService(
+				domainRepository,
+				topicRepository,
+				reviewPointRepository);
 	}
 
 	@Test
@@ -127,12 +130,13 @@ class TopicServiceTests {
 
 		TopicSummaryResponse response = topicService.updatePlanning(
 				topic.getId(),
-				new UpdateTopicPlanningRequest(RelevanceTier.SUPPLEMENT, false, 1));
+				new UpdateTopicPlanningRequest(RelevanceTier.SUPPLEMENT, false, 1, 1));
 
 		assertThat(topic.isAutoPlannable()).isFalse();
 		assertThat(response.relevanceTier()).isEqualTo("SUPPLEMENT");
 		assertThat(response.planEnabled()).isFalse();
 		assertThat(response.interviewValue()).isEqualTo(1);
+		assertThat(response.newExpansionLimit()).isEqualTo(1);
 	}
 
 	@Test
@@ -171,8 +175,12 @@ class TopicServiceTests {
 		List<ReviewPoint> savedPoints = new ArrayList<>();
 		when(topicRepository.findAllById(List.of(cacheTopic.getId(), streamTopic.getId())))
 				.thenReturn(List.of(cacheTopic, streamTopic));
-		when(reviewPointRepository.findByTopicId(cacheTopic.getId())).thenReturn(List.of());
-		when(reviewPointRepository.findByTopicId(streamTopic.getId())).thenReturn(List.of());
+		when(reviewPointRepository.findByTopicId(any())).thenAnswer(invocation -> {
+			UUID topicId = invocation.getArgument(0);
+			return savedPoints.stream()
+					.filter(point -> point.getTopic().getId().equals(topicId))
+					.toList();
+		});
 		when(domainRepository.findAllByOrderBySortOrderAscNameAsc()).thenReturn(List.of(domain));
 		when(topicRepository.findAllWithDomain()).thenReturn(List.of(cacheTopic, streamTopic));
 		when(reviewPointRepository.saveAll(any())).thenAnswer(invocation -> {

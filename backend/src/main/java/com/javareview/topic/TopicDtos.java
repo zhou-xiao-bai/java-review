@@ -40,6 +40,7 @@ public final class TopicDtos {
 			String relevanceTier,
 			boolean planEnabled,
 			int interviewValue,
+			int newExpansionLimit,
 			long reviewPointCount,
 			long coveredReviewPointCount,
 			BigDecimal averageMastery,
@@ -84,6 +85,10 @@ public final class TopicDtos {
 			@NotNull
 			@Min(1)
 			@Max(5)
-			Integer interviewValue) {
+			Integer interviewValue,
+			@NotNull
+			@Min(0)
+			@Max(20)
+			Integer newExpansionLimit) {
 	}
 }

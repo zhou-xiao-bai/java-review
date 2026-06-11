@@ -13,40 +13,40 @@ public interface ReviewSessionRepository extends JpaRepository<ReviewSession, UU
 	@Query("""
 			select session
 			from ReviewSession session
-			join fetch session.task task
-			left join fetch task.reviewPoint point
-			left join fetch point.topic topic
-			left join fetch topic.domain domain
+			join fetch session.reviewUnitState state
+			join fetch state.reviewUnit point
+			join fetch point.topic topic
+			join fetch topic.domain domain
 			where session.id = :id
 			and session.user.id = :userId
 			""")
-	Optional<ReviewSession> findByIdAndUserIdWithTask(
+	Optional<ReviewSession> findByIdAndUserIdWithUnit(
 			@Param("id") UUID id,
 			@Param("userId") UUID userId);
 
 	@Query("""
 			select session
 			from ReviewSession session
-			join fetch session.task task
-			left join fetch task.reviewPoint point
-			left join fetch point.topic topic
-			left join fetch topic.domain domain
-			where task.id = :taskId
+			join fetch session.reviewUnitState state
+			join fetch state.reviewUnit point
+			join fetch point.topic topic
+			join fetch topic.domain domain
+			where state.id = :stateId
 			and session.user.id = :userId
 			and session.status = com.javareview.reviewsession.ReviewSessionStatus.ACTIVE
 			order by session.startedAt desc
 			""")
-	List<ReviewSession> findActiveByTaskIdAndUserId(
-			@Param("taskId") UUID taskId,
+	List<ReviewSession> findActiveByStateIdAndUserId(
+			@Param("stateId") UUID stateId,
 			@Param("userId") UUID userId);
 
 	@Query("""
 			select session
 			from ReviewSession session
-			join fetch session.task task
-			left join fetch task.reviewPoint point
-			left join fetch point.topic topic
-			left join fetch topic.domain domain
+			join fetch session.reviewUnitState state
+			join fetch state.reviewUnit point
+			join fetch point.topic topic
+			join fetch topic.domain domain
 			where session.user.id = :userId
 			order by session.startedAt desc
 			""")

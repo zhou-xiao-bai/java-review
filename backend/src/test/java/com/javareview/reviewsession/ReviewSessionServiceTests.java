@@ -13,7 +13,6 @@ import static org.mockito.Mockito.when;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,10 +36,15 @@ import com.javareview.reviewpoint.ReviewPointStatus;
 import com.javareview.reviewpoint.ReviewWeaknessEventRepository;
 import com.javareview.settings.SettingsService;
 import com.javareview.settings.UserSettings;
-import com.javareview.today.ReviewTask;
-import com.javareview.today.ReviewTaskRepository;
-import com.javareview.today.ReviewTaskStatus;
-import com.javareview.today.ReviewTaskType;
+import com.javareview.today.ReviewPriorityService;
+import com.javareview.reviewunit.ReviewAttemptRepository;
+import com.javareview.reviewunit.ReviewAttemptResult;
+import com.javareview.reviewunit.TodayReviewAction;
+import com.javareview.reviewunit.TodayReviewActionRepository;
+import com.javareview.reviewunit.TodayReviewActionType;
+import com.javareview.reviewunit.UserReviewUnitState;
+import com.javareview.reviewunit.UserReviewUnitStateRepository;
+import com.javareview.reviewunit.UserReviewUnitStatus;
 import com.javareview.topic.Domain;
 import com.javareview.topic.Topic;
 import com.javareview.topic.TopicSource;
@@ -51,7 +55,13 @@ class ReviewSessionServiceTests {
 	private static final Instant NOW = Instant.parse("2026-06-03T00:00:00Z");
 
 	@Mock
-	private ReviewTaskRepository reviewTaskRepository;
+	private UserReviewUnitStateRepository reviewUnitStateRepository;
+
+	@Mock
+	private ReviewAttemptRepository reviewAttemptRepository;
+
+	@Mock
+	private TodayReviewActionRepository todayReviewActionRepository;
 
 	@Mock
 	private ReviewSessionRepository reviewSessionRepository;
@@ -70,40 +80,43 @@ class ReviewSessionServiceTests {
 
 	private ReviewSessionService reviewSessionService;
 	private User user;
-	private ReviewTask task;
+	private UserReviewUnitState state;
 	private ReviewSession session;
 	private ReviewPoint point;
 
 	@BeforeEach
 	void setUp() {
 		reviewSessionService = new ReviewSessionService(
-				reviewTaskRepository,
+				reviewUnitStateRepository,
+				reviewAttemptRepository,
+				todayReviewActionRepository,
 				reviewSessionRepository,
 				reviewTurnRepository,
 				weaknessEventRepository,
 				settingsService,
 				llmClient,
 				new ObjectMapper().findAndRegisterModules(),
+				new ReviewPriorityService(Clock.fixed(NOW, ZoneOffset.UTC)),
 				Clock.fixed(NOW, ZoneOffset.UTC));
 		user = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
 		Topic topic = new Topic(new Domain(java.util.UUID.randomUUID(), "spring", "Spring", 40),
 				"spring-transactions", "Spring 事务", TopicSource.BUILTIN, true);
 		point = new ReviewPoint(topic, "事务代理生效边界", 5, 4, 5, "next probe");
-		task = new ReviewTask(user, point, LocalDate.of(2026, 6, 3), ReviewTaskType.NEW, java.math.BigDecimal.TEN, 10);
-		session = new ReviewSession(user, task, NOW);
+		state = new UserReviewUnitState(user, point, NOW);
+		session = new ReviewSession(user, state, NOW);
 	}
 
 	@Test
 	void startGeneratesInitialQuestionFromReviewPointWithLlm() {
-		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId())).thenReturn(Optional.of(task));
+		when(reviewUnitStateRepository.findByIdAndUserIdWithUnit(state.getId(), user.getId())).thenReturn(Optional.of(state));
 		when(reviewSessionRepository.save(any(ReviewSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(reviewTurnRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(any())).thenAnswer(invocation -> List.of(new ReviewTurn(new ReviewSession(user, task, NOW), ReviewTurnRole.AI, ReviewTurnType.QUESTION, "事务代理在什么情况下会失效？")));
+		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(any())).thenAnswer(invocation -> List.of(new ReviewTurn(new ReviewSession(user, state, NOW), ReviewTurnRole.AI, ReviewTurnType.QUESTION, "事务代理在什么情况下会失效？")));
 		UserSettings settings = new UserSettings(user);
 		when(settingsService.findOrDefault(user)).thenReturn(settings);
 		when(llmClient.complete(eq(settings), any(), any())).thenReturn(LlmResult.success("事务代理在什么情况下会失效？"));
 
-		var response = reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(task.getId()));
+		var response = reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(state.getId()));
 
 		assertThat(response.turns()).hasSize(1);
 		assertThat(response.turns().getFirst().content()).isEqualTo("事务代理在什么情况下会失效？");
@@ -112,26 +125,26 @@ class ReviewSessionServiceTests {
 
 	@Test
 	void startFailsWhenLlmDoesNotGenerateQuestion() {
-		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId())).thenReturn(Optional.of(task));
+		when(reviewUnitStateRepository.findByIdAndUserIdWithUnit(state.getId(), user.getId())).thenReturn(Optional.of(state));
 		when(reviewSessionRepository.save(any(ReviewSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		UserSettings settings = new UserSettings(user);
 		when(settingsService.findOrDefault(user)).thenReturn(settings);
 		when(llmClient.complete(eq(settings), any(), any())).thenReturn(LlmResult.failure("连接失败"));
 
-		assertThatThrownBy(() -> reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(task.getId())))
+		assertThatThrownBy(() -> reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(state.getId())))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("AI 题目生成失败")
 				.hasMessageContaining("连接失败");
 	}
 
 	@Test
-	void startRejectsRemovedTask() {
-		task.removeFromToday(NOW);
-		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId())).thenReturn(Optional.of(task));
+	void startRejectsArchivedReviewUnitState() {
+		state.archive(NOW);
+		when(reviewUnitStateRepository.findByIdAndUserIdWithUnit(state.getId(), user.getId())).thenReturn(Optional.of(state));
 
-		assertThatThrownBy(() -> reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(task.getId())))
+		assertThatThrownBy(() -> reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(state.getId())))
 				.isInstanceOf(IllegalStateException.class)
-				.hasMessage("Review task has been removed from today's plan.");
+				.hasMessage("Review unit is not startable.");
 
 		verify(reviewSessionRepository, never()).save(any());
 		verify(settingsService, never()).findOrDefault(any());
@@ -139,12 +152,11 @@ class ReviewSessionServiceTests {
 
 	@Test
 	void startRestoresExistingActiveSessionForInProgressTask() {
-		task.start();
-		when(reviewTaskRepository.findByIdAndUserIdWithPoint(task.getId(), user.getId())).thenReturn(Optional.of(task));
-		when(reviewSessionRepository.findActiveByTaskIdAndUserId(task.getId(), user.getId())).thenReturn(List.of(session));
+		when(reviewUnitStateRepository.findByIdAndUserIdWithUnit(state.getId(), user.getId())).thenReturn(Optional.of(state));
+		when(reviewSessionRepository.findActiveByStateIdAndUserId(state.getId(), user.getId())).thenReturn(List.of(session));
 		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(session.getId())).thenReturn(new ArrayList<>());
 
-		var response = reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(task.getId()));
+		var response = reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(state.getId()));
 
 		assertThat(response.id()).isEqualTo(session.getId());
 		verify(reviewSessionRepository, never()).save(any());
@@ -162,7 +174,9 @@ class ReviewSessionServiceTests {
 		var response = reviewSessionService.unknown(user, session.getId());
 
 		assertThat(response.status()).isEqualTo("evaluated");
-		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.COMPLETED);
+		assertThat(state.getStatus()).isEqualTo(UserReviewUnitStatus.ACTIVE);
+		assertThat(state.getLastResult()).isEqualTo(ReviewAttemptResult.POOR);
+		assertThat(state.getNextReviewAt()).isEqualTo(NOW.plusSeconds(86_400));
 		assertThat(point.getStatus()).isEqualTo(ReviewPointStatus.UNSTABLE);
 		assertThat(point.getMastery()).isEqualByComparingTo(BigDecimal.valueOf(2));
 		assertThat(point.getReviewCount()).isEqualTo(1);
@@ -170,9 +184,17 @@ class ReviewSessionServiceTests {
 		assertThat(response.evaluation().correctPoints()).isEmpty();
 		assertThat(response.evaluation().score().overall()).isEqualByComparingTo(BigDecimal.valueOf(2));
 		assertThat(response.evaluation().masteryCard().oneSentence()).contains("Spring 代理对象");
+		assertThat(response.evaluation().nextProbe()).contains("继续考察");
+		assertThat(response.evaluation().nextProbe()).doesNotStartWith("请");
+		assertThat(response.evaluation().masteryCard().nextProbe()).contains("继续考察");
 		assertThat(response.evaluation().corrections()).isNotEmpty();
 		assertThat(response.evaluation().corrections())
 				.anySatisfy(correction -> assertThat(correction.correctAnswer()).contains("Spring", "代理"));
+		assertThat(response.reviewPlanExplanation().scheduleRule()).isEqualTo("明天复习");
+		assertThat(response.reviewPlanExplanation().priorityScore()).isPositive();
+		assertThat(response.reviewPlanExplanation().priorityFactors())
+				.anySatisfy(factor -> assertThat(factor.label()).isEqualTo("知识点重要度"))
+				.anySatisfy(factor -> assertThat(factor.label()).isEqualTo("知识点困难度"));
 		verify(llmClient).complete(
 				eq(settings),
 				org.mockito.ArgumentMatchers.contains("复习教练"),
@@ -188,14 +210,19 @@ class ReviewSessionServiceTests {
 	void skipDoesNotUpdateReviewPointMastery() {
 		stubActiveSession();
 		var originalMastery = point.getMastery();
+		when(todayReviewActionRepository.save(any(TodayReviewAction.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
 		var response = reviewSessionService.skip(user, session.getId());
 
 		assertThat(response.status()).isEqualTo("abandoned");
-		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.SKIPPED);
+		assertThat(state.getStatus()).isEqualTo(UserReviewUnitStatus.PENDING_FIRST_REVIEW);
 		assertThat(point.getMastery()).isEqualByComparingTo(originalMastery);
 		assertThat(point.getReviewCount()).isZero();
 		verify(settingsService, never()).findOrDefault(any());
+		ArgumentCaptor<TodayReviewAction> actionCaptor = ArgumentCaptor.forClass(TodayReviewAction.class);
+		verify(todayReviewActionRepository).save(actionCaptor.capture());
+		assertThat(actionCaptor.getValue().getActionType()).isEqualTo(TodayReviewActionType.DISMISS_TODAY);
+		assertThat(actionCaptor.getValue().getReviewUnit()).isSameAs(point);
 	}
 
 	@Test
@@ -239,7 +266,7 @@ class ReviewSessionServiceTests {
 				new ReviewSessionDtos.SubmitAnswerRequest("加了 @Transactional 就会开启事务。"));
 
 		assertThat(response.status()).isEqualTo("active");
-		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.PENDING);
+		assertThat(state.getStatus()).isEqualTo(UserReviewUnitStatus.PENDING_FIRST_REVIEW);
 		ArgumentCaptor<ReviewTurn> turnCaptor = ArgumentCaptor.forClass(ReviewTurn.class);
 		verify(reviewTurnRepository, times(2)).save(turnCaptor.capture());
 		assertThat(turnCaptor.getAllValues().get(1).getTurnType()).isEqualTo(ReviewTurnType.FOLLOW_UP);
@@ -291,7 +318,7 @@ class ReviewSessionServiceTests {
 				new ReviewSessionDtos.SubmitAnswerRequest("事务是通过代理增强的，加了 @Transactional 就会生效。"));
 
 		assertThat(response.status()).isEqualTo("active");
-		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.PENDING);
+		assertThat(state.getStatus()).isEqualTo(UserReviewUnitStatus.PENDING_FIRST_REVIEW);
 		ArgumentCaptor<ReviewTurn> turnCaptor = ArgumentCaptor.forClass(ReviewTurn.class);
 		verify(reviewTurnRepository, times(2)).save(turnCaptor.capture());
 		assertThat(turnCaptor.getAllValues().get(1).getTurnType()).isEqualTo(ReviewTurnType.FOLLOW_UP);
@@ -320,7 +347,8 @@ class ReviewSessionServiceTests {
 				new ReviewSessionDtos.SubmitAnswerRequest("不清楚"));
 
 		assertThat(response.status()).isEqualTo("evaluated");
-		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.COMPLETED);
+		assertThat(state.getStatus()).isEqualTo(UserReviewUnitStatus.ACTIVE);
+		assertThat(state.getLastResult()).isEqualTo(ReviewAttemptResult.POOR);
 		assertThat(point.getStatus()).isEqualTo(ReviewPointStatus.UNSTABLE);
 		assertThat(point.getReviewCount()).isEqualTo(1);
 		assertThat(point.getWrongCount()).isEqualTo(1);
@@ -328,6 +356,9 @@ class ReviewSessionServiceTests {
 		assertThat(response.evaluation().missingPoints()).contains("没有说明事务是否生效取决于调用是否进入 Spring 代理对象");
 		assertThat(response.evaluation().score().overall()).isEqualByComparingTo(BigDecimal.valueOf(2));
 		assertThat(response.evaluation().masteryCard().oneSentence()).contains("Spring 代理对象");
+		assertThat(response.evaluation().nextProbe()).contains("继续考察");
+		assertThat(response.evaluation().nextProbe()).doesNotStartWith("请");
+		assertThat(response.evaluation().masteryCard().nextProbe()).contains("继续考察");
 		assertThat(response.evaluation().corrections()).isNotEmpty();
 		assertThat(response.evaluation().corrections())
 				.anySatisfy(correction -> assertThat(correction.userIssue()).contains("Spring 代理对象"));
@@ -351,8 +382,8 @@ class ReviewSessionServiceTests {
 		Topic topic = new Topic(new Domain(java.util.UUID.randomUUID(), "cache", "缓存", 30),
 				"cache-consistency", "缓存一致性", TopicSource.BUILTIN, true);
 		point = new ReviewPoint(topic, "双写不一致窗口分析", 5, 5, 5, "说明旧值回写窗口。");
-		task = new ReviewTask(user, point, LocalDate.of(2026, 6, 3), ReviewTaskType.NEW, java.math.BigDecimal.TEN, 10);
-		session = new ReviewSession(user, task, NOW);
+		state = new UserReviewUnitState(user, point, NOW);
+		session = new ReviewSession(user, state, NOW);
 		String question = "在一个 Java 电商系统中，商品详情使用 Redis 缓存，数据库是 MySQL。更新商品价格时采用“先更新数据库，再删除缓存”的方案；请分析在高并发场景下，这种双写策略仍然可能出现哪些不一致窗口？";
 		stubActiveSessionWithTurns(List.of(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION, question)));
 		UserSettings settings = new UserSettings(user);
@@ -396,13 +427,13 @@ class ReviewSessionServiceTests {
 		Topic topic = new Topic(new Domain(java.util.UUID.randomUUID(), "cache", "缓存", 30),
 				"cache-consistency", "缓存一致性", TopicSource.BUILTIN, true);
 		point = new ReviewPoint(topic, "双写不一致窗口分析", 5, 5, 5, "说明旧值回写窗口。");
-		task = new ReviewTask(user, point, LocalDate.of(2026, 6, 3), ReviewTaskType.NEW, java.math.BigDecimal.TEN, 10);
-		session = new ReviewSession(user, task, NOW);
+		state = new UserReviewUnitState(user, point, NOW);
+		session = new ReviewSession(user, state, NOW);
 		ReviewEvaluation storedEvaluation = new ObjectMapper().findAndRegisterModules()
 				.readValue(genericNoAnswerEvaluationJson("用户标记不会。"), ReviewEvaluation.class);
 		session.evaluate(storedEvaluation, NOW.plusSeconds(60));
 		String question = "在一个 Java 电商系统中，商品详情使用 Redis 缓存，数据库是 MySQL。更新商品价格时采用“先更新数据库，再删除缓存”的方案；请分析在高并发场景下，这种双写策略仍然可能出现哪些不一致窗口？";
-		when(reviewSessionRepository.findByIdAndUserIdWithTask(session.getId(), user.getId())).thenReturn(Optional.of(session));
+		when(reviewSessionRepository.findByIdAndUserIdWithUnit(session.getId(), user.getId())).thenReturn(Optional.of(session));
 		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(session.getId())).thenReturn(List.of(
 				new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION, question),
 				new ReviewTurn(session, ReviewTurnRole.USER, ReviewTurnType.UNKNOWN, "不会")));
@@ -448,7 +479,8 @@ class ReviewSessionServiceTests {
 				new ReviewSessionDtos.SubmitAnswerRequest("initAccount 会回滚，外层会提交。"));
 
 		assertThat(response.status()).isEqualTo("evaluated");
-		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.COMPLETED);
+		assertThat(state.getStatus()).isEqualTo(UserReviewUnitStatus.ACTIVE);
+		assertThat(state.getLastResult()).isEqualTo(ReviewAttemptResult.POOR);
 		assertThat(point.getWeakPoints()).containsExactly("生产排查路径缺失");
 		ArgumentCaptor<ReviewTurn> turnCaptor = ArgumentCaptor.forClass(ReviewTurn.class);
 		verify(reviewTurnRepository, times(2)).save(turnCaptor.capture());
@@ -502,7 +534,8 @@ class ReviewSessionServiceTests {
 				new ReviewSessionDtos.SubmitAnswerRequest("事务通过代理增强，self-invocation 不经过代理，所以会失效。"));
 
 		assertThat(response.status()).isEqualTo("evaluated");
-		assertThat(task.getStatus()).isEqualTo(ReviewTaskStatus.COMPLETED);
+		assertThat(state.getStatus()).isEqualTo(UserReviewUnitStatus.ACTIVE);
+		assertThat(state.getLastResult()).isEqualTo(ReviewAttemptResult.PARTIAL);
 		assertThat(point.getStatus()).isEqualTo(ReviewPointStatus.STABLE);
 		assertThat(point.getMastery()).isEqualByComparingTo(BigDecimal.valueOf(4));
 		assertThat(point.getMasteryCard()).isNotNull();
@@ -518,7 +551,7 @@ class ReviewSessionServiceTests {
 	}
 
 	private void stubActiveSessionWithTurns(List<ReviewTurn> turns) {
-		when(reviewSessionRepository.findByIdAndUserIdWithTask(session.getId(), user.getId())).thenReturn(Optional.of(session));
+		when(reviewSessionRepository.findByIdAndUserIdWithUnit(session.getId(), user.getId())).thenReturn(Optional.of(session));
 		when(reviewTurnRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(session.getId())).thenReturn(turns);
 	}

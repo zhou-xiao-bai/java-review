@@ -11,18 +11,23 @@ import {
 } from 'lucide-react'
 
 import {
+  admitTopicReviewUnits,
   createTopic,
   getApiErrorMessage,
+  getTopicReviewUnits,
   getTopics,
   initializeTopicPoints,
+  type ReviewUnitSummary,
+  type ReviewUnitsResponse,
   type TopicSummary,
-  updateTopicPlanning,
   updateTopicSelection,
   updateTopicSelections,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const topicsQueryKey = ['topics'] as const
+const reviewUnitsQueryKey = ['review-units'] as const
+const todayQueueQueryKey = ['today-queue'] as const
 
 export function ScopePage() {
   const queryClient = useQueryClient()
@@ -72,6 +77,12 @@ export function ScopePage() {
   const selectedDomainId =
     newTopicDomainId || domains[0]?.id || ''
 
+  const reviewUnitsQuery = useQuery({
+    queryKey: [...reviewUnitsQueryKey, selectedTopic?.id],
+    queryFn: () => getTopicReviewUnits(selectedTopic?.id ?? ''),
+    enabled: Boolean(selectedTopic?.id),
+  })
+
   const selectionMutation = useMutation({
     mutationFn: ({
       id,
@@ -103,25 +114,27 @@ export function ScopePage() {
     mutationFn: initializeTopicPoints,
     onSuccess: async (topic) => {
       setSelectedTopicId(topic.id)
-      await queryClient.invalidateQueries({ queryKey: topicsQueryKey })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: topicsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: reviewUnitsQueryKey }),
+      ])
     },
   })
 
-  const planningMutation = useMutation({
+  const admitMutation = useMutation({
     mutationFn: ({
-      id,
-      interviewValue,
-      planEnabled,
-      relevanceTier,
+      topicId,
+      reviewUnitIds,
     }: {
-      id: string
-      interviewValue: number
-      planEnabled: boolean
-      relevanceTier: TopicSummary['relevanceTier']
-    }) => updateTopicPlanning(id, { interviewValue, planEnabled, relevanceTier }),
-    onSuccess: async (topic) => {
-      setSelectedTopicId(topic.id)
-      await queryClient.invalidateQueries({ queryKey: topicsQueryKey })
+      topicId: string
+      reviewUnitIds?: string[]
+    }) => admitTopicReviewUnits(topicId, reviewUnitIds),
+    onSuccess: async (data) => {
+      setSelectedTopicId(data.topicId)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: reviewUnitsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: todayQueueQueryKey }),
+      ])
     },
   })
 
@@ -140,8 +153,9 @@ export function ScopePage() {
     getApiErrorMessage(selectionMutation.error, '') ||
     getApiErrorMessage(bulkSelectionMutation.error, '') ||
     getApiErrorMessage(initializeMutation.error, '') ||
-    getApiErrorMessage(planningMutation.error, '') ||
+    getApiErrorMessage(admitMutation.error, '') ||
     getApiErrorMessage(createMutation.error, '') ||
+    (reviewUnitsQuery.isError ? getApiErrorMessage(reviewUnitsQuery.error) : '') ||
     (topicsQuery.isError ? getApiErrorMessage(topicsQuery.error) : '')
 
   function handleCreateTopic(event: FormEvent<HTMLFormElement>) {
@@ -172,13 +186,13 @@ export function ScopePage() {
         <div>
           <div className="text-sm font-medium text-emerald-700">M2 scope</div>
           <h1 className="mt-2 text-3xl font-semibold text-slate-950">
-            范围管理
+            学习范围
           </h1>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
-          <Metric label="已选主题" value={topicsQuery.data?.totals.selectedTopicCount ?? 0} />
+          <Metric label="学习中主题" value={topicsQuery.data?.totals.selectedTopicCount ?? 0} />
           <Metric label="主题总数" value={topicsQuery.data?.totals.topicCount ?? 0} />
-          <Metric label="复习点" value={topicsQuery.data?.totals.reviewPointCount ?? 0} />
+          <Metric label="复习单元" value={topicsQuery.data?.totals.reviewPointCount ?? 0} />
         </div>
       </div>
 
@@ -189,7 +203,7 @@ export function ScopePage() {
         </div>
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-4">
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
@@ -283,7 +297,7 @@ export function ScopePage() {
 
           {topicsQuery.isLoading ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
-              正在加载主题范围...
+              正在加载学习范围...
             </div>
           ) : visibleDomains.length === 0 ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">
@@ -301,7 +315,7 @@ export function ScopePage() {
                       {domain.name}
                     </h2>
                     <div className="mt-1 text-xs text-slate-500">
-                      {domain.selectedCount}/{domain.topicCount} 已选
+                      {domain.selectedCount}/{domain.topicCount} 学习中
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -359,19 +373,16 @@ export function ScopePage() {
         </div>
 
         <TopicDetailPanel
+          admitPending={admitMutation.isPending}
           initializePending={initializeMutation.isPending}
-          planningPending={planningMutation.isPending}
+          reviewUnits={reviewUnitsQuery.data}
+          reviewUnitsLoading={reviewUnitsQuery.isLoading}
           selectionPending={selectionPending}
           topic={selectedTopic}
-          onInitialize={(topic) => initializeMutation.mutate(topic.id)}
-          onPlanningChange={(topic, patch) =>
-            planningMutation.mutate({
-              id: topic.id,
-              interviewValue: patch.interviewValue ?? topic.interviewValue,
-              planEnabled: patch.planEnabled ?? topic.planEnabled,
-              relevanceTier: patch.relevanceTier ?? topic.relevanceTier,
-            })
+          onAdmit={(topic, reviewUnitIds) =>
+            admitMutation.mutate({ topicId: topic.id, reviewUnitIds })
           }
+          onInitialize={(topic) => initializeMutation.mutate(topic.id)}
           onToggle={(topic, selected) =>
             selectionMutation.mutate({ id: topic.id, selected })
           }
@@ -464,8 +475,6 @@ function TopicRow({
   onPick: () => void
   onToggle: (selected: boolean) => void
 }) {
-  const autoPlannable = topic.planEnabled && isAutoPlannableTier(topic.relevanceTier)
-
   return (
     <div
       className={cn(
@@ -506,7 +515,7 @@ function TopicRow({
             <span
               className={cn(
                 'rounded px-1.5 py-0.5 text-xs font-medium',
-                autoPlannable
+                topic.selected
                   ? 'bg-emerald-50 text-emerald-700'
                   : 'bg-slate-100 text-slate-500',
               )}
@@ -517,15 +526,15 @@ function TopicRow({
           <div className="mt-1 truncate text-xs text-slate-500">
             {topic.weakPointSummary.length > 0
               ? topic.weakPointSummary.join(' / ')
-              : autoPlannable
-                ? '暂无薄弱点记录'
-                : '不进入自动计划'}
+              : topic.selected
+                ? '已标记为正在学'
+                : '未标记学习范围'}
           </div>
         </button>
       </div>
 
       <div className="flex items-center text-sm text-slate-600 md:justify-end">
-        复习点 {topic.coveredReviewPointCount}/{topic.reviewPointCount}
+        复习单元 {topic.reviewPointCount}
       </div>
       <div className="flex items-center text-sm font-medium text-slate-900 md:justify-end">
         {formatMastery(topic.averageMastery)}
@@ -535,23 +544,24 @@ function TopicRow({
 }
 
 function TopicDetailPanel({
+  admitPending,
   initializePending,
-  planningPending,
+  reviewUnits,
+  reviewUnitsLoading,
   selectionPending,
   topic,
+  onAdmit,
   onInitialize,
-  onPlanningChange,
   onToggle,
 }: {
+  admitPending: boolean
   initializePending: boolean
-  planningPending: boolean
+  reviewUnits: ReviewUnitsResponse | undefined
+  reviewUnitsLoading: boolean
   selectionPending: boolean
   topic: TopicSummary | null
+  onAdmit: (topic: TopicSummary, reviewUnitIds?: string[]) => void
   onInitialize: (topic: TopicSummary) => void
-  onPlanningChange: (
-    topic: TopicSummary,
-    patch: Partial<Pick<TopicSummary, 'interviewValue' | 'planEnabled' | 'relevanceTier'>>,
-  ) => void
   onToggle: (topic: TopicSummary, selected: boolean) => void
 }) {
   if (!topic) {
@@ -561,6 +571,9 @@ function TopicDetailPanel({
       </aside>
     )
   }
+
+  const units = reviewUnits?.units ?? []
+  const unadmittedUnits = units.filter((unit) => !unit.stateId)
 
   return (
     <aside className="h-fit rounded-lg border border-slate-200 bg-white p-5 shadow-sm xl:sticky xl:top-24">
@@ -579,78 +592,14 @@ function TopicDetailPanel({
               : 'bg-slate-100 text-slate-600',
           )}
         >
-          {topic.selected ? '已选' : '未选'}
+          {topic.selected ? '正在学' : '未标记'}
         </span>
       </div>
 
       <div className="mt-5 grid grid-cols-3 gap-3">
-        <PanelMetric label="掌握度" value={formatMastery(topic.averageMastery)} />
-        <PanelMetric
-          label="已覆盖"
-          value={`${topic.coveredReviewPointCount}/${topic.reviewPointCount}`}
-        />
-        <PanelMetric label="价值" value={`${topic.interviewValue}/5`} />
-      </div>
-
-      <div className="mt-5 rounded-md border border-slate-200 p-3">
-        <div className="text-sm font-semibold text-slate-950">计划策略</div>
-        <div className="mt-3 grid gap-3">
-          <label className="grid gap-1.5 text-xs font-medium text-slate-500">
-            层级
-            <select
-              className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-slate-500 disabled:opacity-60"
-              disabled={planningPending}
-              value={topic.relevanceTier}
-              onChange={(event) =>
-                onPlanningChange(topic, {
-                  relevanceTier: event.target.value as TopicSummary['relevanceTier'],
-                  planEnabled: isAutoPlannableTier(event.target.value)
-                    ? topic.planEnabled || !isAutoPlannableTier(topic.relevanceTier)
-                    : false,
-                })
-              }
-            >
-              <option value="CORE">核心高频</option>
-              <option value="PROJECT">项目相关</option>
-              <option value="SUPPLEMENT">低频补充</option>
-              <option value="ARCHIVED">暂不复习</option>
-            </select>
-          </label>
-
-          <label className="grid gap-1.5 text-xs font-medium text-slate-500">
-            面试价值
-            <select
-              className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-slate-500 disabled:opacity-60"
-              disabled={planningPending}
-              value={topic.interviewValue}
-              onChange={(event) =>
-                onPlanningChange(topic, { interviewValue: Number(event.target.value) })
-              }
-            >
-              {[1, 2, 3, 4, 5].map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              checked={topic.planEnabled && isAutoPlannableTier(topic.relevanceTier)}
-              className="size-4 rounded border-slate-300"
-              disabled={planningPending || !isAutoPlannableTier(topic.relevanceTier)}
-              type="checkbox"
-              onChange={(event) =>
-                onPlanningChange(topic, { planEnabled: event.target.checked })
-              }
-            />
-            进入自动计划
-          </label>
-          <div className="text-xs leading-5 text-slate-500">
-            自动计划只会抽取核心高频和项目相关主题；低频补充可手动加练。
-          </div>
-        </div>
+        <PanelMetric label="单元" value={String(reviewUnits?.totalCount ?? topic.reviewPointCount)} />
+        <PanelMetric label="已纳入" value={String(reviewUnits?.admittedCount ?? 0)} />
+        <PanelMetric label="待首考" value={String(reviewUnits?.pendingFirstReviewCount ?? 0)} />
       </div>
 
       <div className="mt-5 space-y-3">
@@ -672,7 +621,21 @@ function TopicDetailPanel({
           ) : (
             <CheckCircle2 className="size-4" aria-hidden="true" />
           )}
-          {topic.selected ? '移出范围' : '加入范围'}
+          {topic.selected ? '不再标记正在学' : '标记为正在学'}
+        </button>
+
+        <button
+          disabled={admitPending || reviewUnitsLoading || unadmittedUnits.length === 0}
+          type="button"
+          onClick={() => onAdmit(topic)}
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-emerald-700 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {admitPending ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Plus className="size-4" aria-hidden="true" />
+          )}
+          纳入未纳入单元
         </button>
 
         <button
@@ -686,26 +649,40 @@ function TopicDetailPanel({
           ) : (
             <RefreshCw className="size-4" aria-hidden="true" />
           )}
-          补齐复习点
+          补齐复习单元
         </button>
-        <div className="text-xs leading-5 text-slate-500">
-          加入范围会自动准备复习点；此按钮用于补齐旧主题缺失的点。
-        </div>
       </div>
 
       <div className="mt-5 border-t border-slate-200 pt-5">
-        <div className="text-sm font-semibold text-slate-950">薄弱点摘要</div>
-        {topic.weakPointSummary.length > 0 ? (
-          <ul className="mt-3 space-y-2 text-sm text-slate-600">
-            {topic.weakPointSummary.map((weakPoint) => (
-              <li key={weakPoint} className="rounded-md bg-slate-50 px-3 py-2">
-                {weakPoint}
-              </li>
-            ))}
-          </ul>
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-semibold text-slate-950">复习单元</div>
+          {reviewUnitsLoading ? (
+            <Loader2 className="size-4 animate-spin text-slate-400" aria-hidden="true" />
+          ) : (
+            <span className="text-xs text-slate-500">
+              {reviewUnits?.admittedCount ?? 0}/{reviewUnits?.totalCount ?? topic.reviewPointCount}
+            </span>
+          )}
+        </div>
+
+        {reviewUnitsLoading ? (
+          <div className="mt-3 rounded-md bg-slate-50 px-3 py-4 text-sm text-slate-500">
+            正在加载复习单元...
+          </div>
+        ) : units.length === 0 ? (
+          <div className="mt-3 rounded-md bg-slate-50 px-3 py-4 text-sm text-slate-500">
+            暂无复习单元
+          </div>
         ) : (
-          <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">
-            暂无薄弱点记录
+          <div className="mt-3 max-h-[480px] space-y-2 overflow-y-auto pr-1">
+            {units.map((unit) => (
+              <ReviewUnitRow
+                key={unit.reviewUnitId}
+                admitPending={admitPending}
+                unit={unit}
+                onAdmit={() => onAdmit(topic, [unit.reviewUnitId])}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -719,6 +696,84 @@ function TopicDetailPanel({
         </div>
       </div>
     </aside>
+  )
+}
+
+function ReviewUnitRow({
+  admitPending,
+  onAdmit,
+  unit,
+}: {
+  admitPending: boolean
+  onAdmit: () => void
+  unit: ReviewUnitSummary
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-slate-950">
+            {unit.title}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <UnitStatusTag status={unit.stateStatus} />
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+              重要 {unit.importance}
+            </span>
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+              难度 {unit.difficulty}
+            </span>
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+              高频 {unit.interviewFrequency}
+            </span>
+          </div>
+        </div>
+
+        {!unit.stateId ? (
+          <button
+            type="button"
+            disabled={admitPending}
+            onClick={onAdmit}
+            className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md bg-slate-900 px-2.5 text-xs font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {admitPending ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Plus className="size-3.5" aria-hidden="true" />
+            )}
+            纳入
+          </button>
+        ) : null}
+      </div>
+
+      <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
+        <div>掌握度 {formatMastery(unit.mastery)}</div>
+        <div>下次 {unit.nextReviewAt ? formatDate(unit.nextReviewAt) : '未安排'}</div>
+      </div>
+      {unit.weakPoints.length > 0 ? (
+        <div className="mt-2 truncate text-xs text-rose-700">
+          {unit.weakPoints.slice(0, 2).join(' / ')}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function UnitStatusTag({ status }: { status: ReviewUnitSummary['stateStatus'] }) {
+  const label = reviewUnitStatusLabel(status)
+  return (
+    <span
+      className={cn(
+        'rounded px-1.5 py-0.5 text-xs font-medium',
+        !status && 'bg-slate-100 text-slate-500',
+        status === 'PENDING_FIRST_REVIEW' && 'bg-amber-50 text-amber-700',
+        status === 'ACTIVE' && 'bg-emerald-50 text-emerald-700',
+        status === 'ARCHIVED' && 'bg-slate-100 text-slate-500',
+        status === 'NOT_FOR_ME' && 'bg-rose-50 text-rose-700',
+      )}
+    >
+      {label}
+    </span>
   )
 }
 
@@ -743,8 +798,13 @@ function tierLabel(value: TopicSummary['relevanceTier']) {
   return value
 }
 
-function isAutoPlannableTier(value: string) {
-  return value === 'CORE' || value === 'PROJECT'
+function reviewUnitStatusLabel(status: ReviewUnitSummary['stateStatus']) {
+  if (!status) return '未纳入'
+  if (status === 'PENDING_FIRST_REVIEW') return '待首考'
+  if (status === 'ACTIVE') return '复习中'
+  if (status === 'ARCHIVED') return '已归档'
+  if (status === 'NOT_FOR_ME') return '不适合'
+  return status
 }
 
 function formatDate(value: string) {

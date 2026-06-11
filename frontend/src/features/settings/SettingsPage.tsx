@@ -60,15 +60,12 @@ export function SettingsPage() {
         })),
         requestTimeoutSeconds: settingsQuery.data.requestTimeoutSeconds,
         dailyReviewMinutes: settingsQuery.data.dailyReviewMinutes,
-        reviewedPointSchedulingPolicy:
-          settingsQuery.data.reviewedPointSchedulingPolicy ?? 'follow_scope',
       }
     : {
         activeLlmConfigId: 'default',
         llmConfigs: [defaultConfig('default')],
         requestTimeoutSeconds: 30,
         dailyReviewMinutes: 60,
-        reviewedPointSchedulingPolicy: 'follow_scope',
       }
 
   return (
@@ -86,11 +83,7 @@ export function SettingsPage() {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
         <SettingsForm
-          key={
-            settingsQuery.data
-              ? `${settingsQuery.data.activeLlmConfigId}-${settingsQuery.data.llmConfigs.length}-${settingsQuery.data.reviewedPointSchedulingPolicy}`
-              : 'loading'
-          }
+          key={settingsQuery.data ? `${settingsQuery.data.activeLlmConfigId}-${settingsQuery.data.llmConfigs.length}` : 'loading'}
           form={initialForm}
           saving={saveMutation.isPending}
           saveSuccess={saveMutation.isSuccess}
@@ -218,52 +211,6 @@ function SettingsForm({
                     setForm({ ...form, dailyReviewMinutes: Number(event.target.value) })
                   }
                 />
-              </Field>
-            </div>
-            <div className="mt-4">
-              <Field label="已复习题目排期">
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        reviewedPointSchedulingPolicy: 'follow_scope',
-                      })
-                    }
-                    className={cn(
-                      'rounded-md border px-3 py-2 text-left text-sm',
-                      form.reviewedPointSchedulingPolicy === 'follow_scope'
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
-                    )}
-                  >
-                    <span className="block font-medium">跟随范围</span>
-                    <span className="mt-1 block text-xs opacity-70">
-                      到期和顺延题仍受当前范围控制
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        reviewedPointSchedulingPolicy: 'keep_reviewed',
-                      })
-                    }
-                    className={cn(
-                      'rounded-md border px-3 py-2 text-left text-sm',
-                      form.reviewedPointSchedulingPolicy === 'keep_reviewed'
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
-                    )}
-                  >
-                    <span className="block font-medium">复习后独立</span>
-                    <span className="mt-1 block text-xs opacity-70">
-                      已复习题到期后继续进入计划
-                    </span>
-                  </button>
-                </div>
               </Field>
             </div>
             <div className="mt-5 flex flex-wrap gap-2">

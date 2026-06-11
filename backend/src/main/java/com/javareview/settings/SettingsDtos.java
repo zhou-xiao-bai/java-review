@@ -6,7 +6,6 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public final class SettingsDtos {
@@ -23,8 +22,7 @@ public final class SettingsDtos {
 			String activeLlmConfigId,
 			List<LlmConfigResponse> llmConfigs,
 			int requestTimeoutSeconds,
-			int dailyReviewMinutes,
-			String reviewedPointSchedulingPolicy) {
+			int dailyReviewMinutes) {
 	}
 
 	public record LlmConfigResponse(
@@ -48,10 +46,7 @@ public final class SettingsDtos {
 			int requestTimeoutSeconds,
 			@Min(10)
 			@Max(240)
-			int dailyReviewMinutes,
-			@NotBlank
-			@Pattern(regexp = "follow_scope|keep_reviewed")
-			String reviewedPointSchedulingPolicy) {
+			int dailyReviewMinutes) {
 	}
 
 	public record LlmConfigRequest(
