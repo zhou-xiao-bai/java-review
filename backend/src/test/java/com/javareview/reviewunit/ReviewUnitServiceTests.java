@@ -47,6 +47,9 @@ class ReviewUnitServiceTests {
 	private ReviewPointRepository reviewPointRepository;
 
 	@Mock
+	private QuestionVariantRepository questionVariantRepository;
+
+	@Mock
 	private UserReviewUnitStateRepository stateRepository;
 
 	private ReviewUnitService reviewUnitService;
@@ -59,6 +62,7 @@ class ReviewUnitServiceTests {
 		reviewUnitService = new ReviewUnitService(
 				topicRepository,
 				reviewPointRepository,
+				questionVariantRepository,
 				stateRepository,
 				Clock.fixed(NOW, ZoneOffset.UTC));
 		user = new User("admin", "admin@example.com", "hash", "Admin", UserRole.ADMIN);
@@ -75,15 +79,20 @@ class ReviewUnitServiceTests {
 		when(reviewPointRepository.findByTopicId(topic.getId())).thenReturn(List.of(admittedUnit, unadmittedUnit));
 		when(stateRepository.findByUserIdAndReviewUnitIdIn(eq(user.getId()), anyCollection()))
 				.thenReturn(List.of(state));
+		when(questionVariantRepository.countEnabledByReviewUnitIds(anyCollection()))
+				.thenReturn(List.of(variantCount(admittedUnit, 3), variantCount(unadmittedUnit, 2)));
 
 		ReviewUnitsResponse response = reviewUnitService.listTopicReviewUnits(user, topic.getId());
 
 		assertThat(response.totalCount()).isEqualTo(2);
+		assertThat(response.questionVariantCount()).isEqualTo(5);
 		assertThat(response.admittedCount()).isEqualTo(1);
 		assertThat(response.pendingFirstReviewCount()).isEqualTo(1);
 		assertThat(response.units())
 				.extracting(unit -> unit.stateStatus() == null ? "UNADMITTED" : unit.stateStatus())
 				.containsExactly("PENDING_FIRST_REVIEW", "UNADMITTED");
+		assertThat(response.units()).extracting(ReviewUnitDtos.ReviewUnitSummaryResponse::questionVariantCount)
+				.containsExactly(3L, 2L);
 	}
 
 	@Test
@@ -94,6 +103,7 @@ class ReviewUnitServiceTests {
 		List<UserReviewUnitState> states = new ArrayList<>(List.of(existingState));
 		when(topicRepository.findById(topic.getId())).thenReturn(Optional.of(topic));
 		when(reviewPointRepository.findByTopicId(topic.getId())).thenReturn(List.of(existingUnit, newUnit));
+		when(questionVariantRepository.countEnabledByReviewUnitIds(anyCollection())).thenReturn(List.of());
 		when(stateRepository.findByUserIdAndReviewUnitIdIn(eq(user.getId()), anyCollection()))
 				.thenAnswer(invocation -> List.copyOf(states));
 		when(stateRepository.saveAll(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
@@ -147,5 +157,19 @@ class ReviewUnitServiceTests {
 
 	private ReviewPoint reviewUnit(String title, int importance, int difficulty, int interviewFrequency) {
 		return new ReviewPoint(topic, title, importance, difficulty, interviewFrequency, "next probe");
+	}
+
+	private static QuestionVariantRepository.ReviewUnitVariantCount variantCount(ReviewPoint unit, long count) {
+		return new QuestionVariantRepository.ReviewUnitVariantCount() {
+			@Override
+			public UUID getReviewUnitId() {
+				return unit.getId();
+			}
+
+			@Override
+			public long getVariantCount() {
+				return count;
+			}
+		};
 	}
 }

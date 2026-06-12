@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -41,6 +42,18 @@ public interface UserReviewUnitStateRepository extends JpaRepository<UserReviewU
 			@Param("reviewUnitId") UUID reviewUnitId);
 
 	List<UserReviewUnitState> findByUserIdAndReviewUnitIdIn(UUID userId, Collection<UUID> reviewUnitIds);
+
+	@Modifying
+	@Query("""
+			delete from UserReviewUnitState state
+			where state.user.id = :userId
+			and state.reviewUnit.id in :reviewUnitIds
+			and state.status = com.javareview.reviewunit.UserReviewUnitStatus.PENDING_FIRST_REVIEW
+			and state.firstReviewedAt is null
+			""")
+	int deletePendingUnreviewedByUserIdAndReviewUnitIdIn(
+			@Param("userId") UUID userId,
+			@Param("reviewUnitIds") Collection<UUID> reviewUnitIds);
 
 	@Query("""
 			select state

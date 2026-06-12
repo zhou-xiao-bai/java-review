@@ -13,16 +13,24 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.javareview.auth.User;
 import com.javareview.common.ResourceNotFoundException;
 import com.javareview.reviewpoint.AutoPlanTier;
 import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointRepository;
 import com.javareview.reviewpoint.ReviewPointStatus;
+import com.javareview.reviewunit.QuestionVariant;
+import com.javareview.reviewunit.QuestionVariantRepository;
+import com.javareview.reviewunit.QuestionVariantType;
+import com.javareview.reviewunit.UserReviewUnitState;
+import com.javareview.reviewunit.UserReviewUnitStateRepository;
+import com.javareview.reviewunit.UserReviewUnitStatus;
 import com.javareview.topic.TopicDtos.CreateTopicRequest;
 import com.javareview.topic.TopicDtos.DomainTopicsResponse;
 import com.javareview.topic.TopicDtos.TopicSummaryResponse;
@@ -36,13 +44,13 @@ import com.javareview.topic.TopicDtos.UpdateTopicSelectionsRequest;
 public class TopicService {
 
 	private static final BigDecimal ZERO_MASTERY = BigDecimal.ZERO.setScale(2);
-	private static final List<PointTemplate> DEFAULT_TEMPLATES = List.of(
+	private static final List<PointTemplate> DEFAULT_VARIANT_TEMPLATES = List.of(
 			PointTemplate.core("%s 核心机制与调用链路", 4, 3, 4),
 			PointTemplate.core("%s 高频面试边界", 5, 4, 5),
 			PointTemplate.core("%s 生产故障排查", 5, 4, 4),
 			PointTemplate.expand("%s 对比取舍与反例", 4, 4, 4),
 			PointTemplate.optional("%s 两分钟表达结构", 3, 3, 5));
-	private static final Map<String, List<PointTemplate>> BUILTIN_DOMAIN_TEMPLATES = Map.ofEntries(
+	private static final Map<String, List<PointTemplate>> BUILTIN_DOMAIN_VARIANT_TEMPLATES = Map.ofEntries(
 			Map.entry("java-foundation", List.of(
 					new PointTemplate("%s API 语义与常见误用", 4, 3, 5),
 					new PointTemplate("%s 源码结构与复杂度", 4, 4, 4),
@@ -133,7 +141,7 @@ public class TopicService {
 					new PointTemplate("%s 失效边界与异常场景", 5, 4, 5),
 					new PointTemplate("%s 生产排查路径", 5, 5, 5),
 					new PointTemplate("%s 面试表达闭环", 4, 3, 5))));
-	private static final Map<String, List<PointTemplate>> BUILTIN_TEMPLATES = Map.ofEntries(
+	private static final Map<String, List<PointTemplate>> BUILTIN_TOPIC_VARIANT_TEMPLATES = Map.ofEntries(
 			Map.entry("spring-transactions", List.of(
 					new PointTemplate("事务代理生效边界", 5, 4, 5),
 					new PointTemplate("传播行为与嵌套调用", 5, 4, 5),
@@ -187,21 +195,39 @@ public class TopicService {
 	private final DomainRepository domainRepository;
 	private final TopicRepository topicRepository;
 	private final ReviewPointRepository reviewPointRepository;
+	private final QuestionVariantRepository questionVariantRepository;
+	private final UserReviewUnitStateRepository reviewUnitStateRepository;
 
 	public TopicService(
 			DomainRepository domainRepository,
 			TopicRepository topicRepository,
-			ReviewPointRepository reviewPointRepository) {
+			ReviewPointRepository reviewPointRepository,
+			QuestionVariantRepository questionVariantRepository,
+			UserReviewUnitStateRepository reviewUnitStateRepository) {
 		this.domainRepository = domainRepository;
 		this.topicRepository = topicRepository;
 		this.reviewPointRepository = reviewPointRepository;
+		this.questionVariantRepository = questionVariantRepository;
+		this.reviewUnitStateRepository = reviewUnitStateRepository;
 	}
 
-	@Transactional(readOnly = true)
-	public TopicsResponse listTopics(String search) {
+	@Transactional
+	public TopicsResponse listTopics(User user, String search) {
 		List<Domain> domains = domainRepository.findAllByOrderBySortOrderAscNameAsc();
 		List<Topic> topics = topicRepository.findAllWithDomain();
+		topics.stream()
+				.filter(Topic::isSelected)
+				.forEach(this::initializePoints);
 		Map<UUID, List<ReviewPoint>> pointsByTopic = loadPointsByTopic(topics.stream().map(Topic::getId).toList());
+		admitUnits(user, pointsByTopic.values()
+				.stream()
+				.flatMap(Collection::stream)
+				.filter(point -> point.getTopic().isSelected())
+				.toList());
+		Map<UUID, UserReviewUnitState> statesByUnitId = loadStatesByUnit(user, pointsByTopic.values()
+				.stream()
+				.flatMap(Collection::stream)
+				.toList());
 		String normalizedSearch = normalizeSearch(search);
 
 		List<DomainTopicsResponse> domainResponses = new ArrayList<>();
@@ -209,7 +235,7 @@ public class TopicService {
 			List<TopicSummaryResponse> topicResponses = topics.stream()
 					.filter(topic -> topic.getDomain().getId().equals(domain.getId()))
 					.filter(topic -> matchesSearch(topic, normalizedSearch))
-					.map(topic -> toTopicSummary(topic, pointsByTopic.getOrDefault(topic.getId(), List.of())))
+					.map(topic -> toTopicSummary(topic, pointsByTopic.getOrDefault(topic.getId(), List.of()), statesByUnitId))
 					.toList();
 
 			if (!topicResponses.isEmpty() || normalizedSearch == null) {
@@ -227,7 +253,7 @@ public class TopicService {
 	}
 
 	@Transactional
-	public TopicSummaryResponse createTopic(CreateTopicRequest request) {
+	public TopicSummaryResponse createTopic(User user, CreateTopicRequest request) {
 		Domain domain = domainRepository.findById(request.domainId())
 				.orElseThrow(() -> new ResourceNotFoundException("Domain not found."));
 		String title = trimRequired(request.title(), "title");
@@ -243,22 +269,29 @@ public class TopicService {
 				true));
 		initializePoints(topic);
 		List<ReviewPoint> points = reviewPointRepository.findByTopicId(topic.getId());
-		return toTopicSummary(topic, points);
+		admitUnits(user, points);
+		return toTopicSummary(topic, points, statesByUnitId(user, points));
 	}
 
 	@Transactional
-	public TopicSummaryResponse updateSelection(UUID topicId, UpdateTopicSelectionRequest request) {
+	public TopicSummaryResponse updateSelection(User user, UUID topicId, UpdateTopicSelectionRequest request) {
 		Topic topic = requireTopic(topicId);
 		topic.setSelected(request.selected());
 		if (Boolean.TRUE.equals(request.selected())) {
 			initializePoints(topic);
 		}
 		List<ReviewPoint> points = reviewPointRepository.findByTopicId(topic.getId());
-		return toTopicSummary(topic, points);
+		if (Boolean.TRUE.equals(request.selected())) {
+			admitUnits(user, points);
+		}
+		else {
+			removePendingUnreviewedUnits(user, points);
+		}
+		return toTopicSummary(topic, points, statesByUnitId(user, points));
 	}
 
 	@Transactional
-	public TopicsResponse updateSelections(UpdateTopicSelectionsRequest request) {
+	public TopicsResponse updateSelections(User user, UpdateTopicSelectionsRequest request) {
 		List<UUID> topicIds = request.topicIds()
 				.stream()
 				.collect(Collectors.collectingAndThen(
@@ -270,32 +303,44 @@ public class TopicService {
 		}
 
 		boolean selected = Boolean.TRUE.equals(request.selected());
+		List<ReviewPoint> changedUnits = new ArrayList<>();
 		for (Topic topic : topics) {
 			topic.setSelected(selected);
 			if (selected) {
 				initializePoints(topic);
 			}
+			changedUnits.addAll(reviewPointRepository.findByTopicId(topic.getId()));
 		}
-		return listTopics(null);
+		if (selected) {
+			admitUnits(user, changedUnits);
+		}
+		else {
+			removePendingUnreviewedUnits(user, changedUnits);
+		}
+		return listTopics(user, null);
 	}
 
 	@Transactional
-	public TopicSummaryResponse updatePlanning(UUID topicId, UpdateTopicPlanningRequest request) {
+	public TopicSummaryResponse updatePlanning(User user, UUID topicId, UpdateTopicPlanningRequest request) {
 		Topic topic = requireTopic(topicId);
 		topic.updatePlanning(
 				request.relevanceTier(),
 				Boolean.TRUE.equals(request.planEnabled()),
 				request.interviewValue(),
 				request.newExpansionLimit());
-		return toTopicSummary(topic, reviewPointRepository.findByTopicId(topic.getId()));
+		List<ReviewPoint> points = reviewPointRepository.findByTopicId(topic.getId());
+		return toTopicSummary(topic, points, statesByUnitId(user, points));
 	}
 
 	@Transactional
-	public TopicSummaryResponse initializePoints(UUID topicId) {
+	public TopicSummaryResponse initializePoints(User user, UUID topicId) {
 		Topic topic = requireTopic(topicId);
 		initializePoints(topic);
 		List<ReviewPoint> points = reviewPointRepository.findByTopicId(topic.getId());
-		return toTopicSummary(topic, points);
+		if (topic.isSelected()) {
+			admitUnits(user, points);
+		}
+		return toTopicSummary(topic, points, statesByUnitId(user, points));
 	}
 
 	private Topic requireTopic(UUID topicId) {
@@ -305,22 +350,54 @@ public class TopicService {
 
 	private void initializePoints(Topic topic) {
 		List<ReviewPoint> existingPoints = reviewPointRepository.findByTopicId(topic.getId());
-		List<PointTemplate> templates = BUILTIN_TEMPLATES.get(topic.getCode());
-		if (templates == null && !existingPoints.isEmpty()) {
+		List<PointTemplate> variantTemplates = variantTemplatesFor(topic);
+		if (!existingPoints.isEmpty()) {
+			ensureQuestionVariants(topic, existingPoints, variantTemplates);
 			return;
 		}
-		if (templates == null) {
-			templates = BUILTIN_DOMAIN_TEMPLATES.getOrDefault(topic.getDomain().getCode(), DEFAULT_TEMPLATES);
+
+		ReviewPoint reviewUnit = reviewUnitTemplate(topic, variantTemplates).toReviewPoint(topic);
+		List<ReviewPoint> savedPoints = reviewPointRepository.saveAll(List.of(reviewUnit));
+		ensureQuestionVariants(topic, savedPoints, variantTemplates);
+	}
+
+	private static List<PointTemplate> variantTemplatesFor(Topic topic) {
+		List<PointTemplate> templates = BUILTIN_TOPIC_VARIANT_TEMPLATES.get(topic.getCode());
+		if (templates != null) {
+			return templates;
 		}
-		List<ReviewPoint> missingPoints = templates.stream()
-				.filter(template -> existingPoints.stream()
-						.noneMatch(point -> point.getTitle().equals(template.resolvedTitle(topic))))
-				.map(template -> template.toReviewPoint(topic))
+		return BUILTIN_DOMAIN_VARIANT_TEMPLATES.getOrDefault(topic.getDomain().getCode(), DEFAULT_VARIANT_TEMPLATES);
+	}
+
+	private static PointTemplate reviewUnitTemplate(Topic topic, List<PointTemplate> variantTemplates) {
+		int importance = variantTemplates.stream().mapToInt(PointTemplate::importance).max().orElse(4);
+		int difficulty = variantTemplates.stream().mapToInt(PointTemplate::difficulty).max().orElse(4);
+		int interviewFrequency = variantTemplates.stream().mapToInt(PointTemplate::interviewFrequency).max().orElse(4);
+		AutoPlanTier autoPlanTier = variantTemplates.stream().anyMatch(template -> template.autoPlanTier() == AutoPlanTier.CORE)
+				? AutoPlanTier.CORE
+				: AutoPlanTier.EXPAND;
+		return new PointTemplate(topic.getTitle(), importance, difficulty, interviewFrequency, autoPlanTier);
+	}
+
+	private void ensureQuestionVariants(Topic topic, List<ReviewPoint> reviewUnits, List<PointTemplate> variantTemplates) {
+		if (reviewUnits.isEmpty()) {
+			return;
+		}
+		Map<UUID, ReviewPoint> unitsById = reviewUnits.stream()
+				.collect(Collectors.toMap(ReviewPoint::getId, Function.identity(), (left, right) -> left));
+		Map<UUID, Long> variantCountsByUnitId = questionVariantRepository.countEnabledByReviewUnitIds(unitsById.keySet())
+				.stream()
+				.collect(Collectors.toMap(
+						QuestionVariantRepository.ReviewUnitVariantCount::getReviewUnitId,
+						QuestionVariantRepository.ReviewUnitVariantCount::getVariantCount));
+		List<QuestionVariant> missingVariants = unitsById.values()
+				.stream()
+				.filter(unit -> variantCountsByUnitId.getOrDefault(unit.getId(), 0L) == 0)
+				.flatMap(unit -> variantTemplates.stream().map(template -> template.toQuestionVariant(topic, unit)))
 				.toList();
-		if (missingPoints.isEmpty()) {
-			return;
+		if (!missingVariants.isEmpty()) {
+			questionVariantRepository.saveAll(missingVariants);
 		}
-		reviewPointRepository.saveAll(missingPoints);
 	}
 
 	private Map<UUID, List<ReviewPoint>> loadPointsByTopic(Collection<UUID> topicIds) {
@@ -329,11 +406,59 @@ public class TopicService {
 		}
 		return reviewPointRepository.findByTopicIdIn(topicIds)
 				.stream()
-				.collect(Collectors.groupingBy(point -> point.getTopic().getId(), HashMap::new, Collectors.toList()));
+					.collect(Collectors.groupingBy(point -> point.getTopic().getId(), HashMap::new, Collectors.toList()));
 	}
 
-	private static TopicSummaryResponse toTopicSummary(Topic topic, List<ReviewPoint> points) {
+	private Map<UUID, UserReviewUnitState> loadStatesByUnit(User user, Collection<ReviewPoint> points) {
+		if (points.isEmpty()) {
+			return Map.of();
+		}
+		return statesByUnitId(user, points);
+	}
+
+	private Map<UUID, UserReviewUnitState> statesByUnitId(User user, Collection<ReviewPoint> points) {
+		if (points.isEmpty()) {
+			return Map.of();
+		}
+		List<UUID> unitIds = points.stream().map(ReviewPoint::getId).toList();
+		return reviewUnitStateRepository.findByUserIdAndReviewUnitIdIn(user.getId(), unitIds)
+				.stream()
+				.collect(Collectors.toMap(state -> state.getReviewUnit().getId(), Function.identity()));
+	}
+
+	private void admitUnits(User user, Collection<ReviewPoint> units) {
+		if (units.isEmpty()) {
+			return;
+		}
+		Map<UUID, UserReviewUnitState> existingStates = statesByUnitId(user, units);
+		Instant now = Instant.now();
+		List<UserReviewUnitState> newStates = units.stream()
+				.filter(unit -> !existingStates.containsKey(unit.getId()))
+				.map(unit -> new UserReviewUnitState(user, unit, now))
+				.toList();
+		if (!newStates.isEmpty()) {
+			reviewUnitStateRepository.saveAll(newStates);
+		}
+	}
+
+	private void removePendingUnreviewedUnits(User user, Collection<ReviewPoint> units) {
+		if (units.isEmpty()) {
+			return;
+		}
+		reviewUnitStateRepository.deletePendingUnreviewedByUserIdAndReviewUnitIdIn(
+				user.getId(),
+				units.stream().map(ReviewPoint::getId).toList());
+	}
+
+	private static TopicSummaryResponse toTopicSummary(
+			Topic topic,
+			List<ReviewPoint> points,
+			Map<UUID, UserReviewUnitState> statesByUnitId) {
 		TopicAggregate aggregate = aggregate(points);
+		List<UserReviewUnitState> states = points.stream()
+				.map(point -> statesByUnitId.get(point.getId()))
+				.filter(state -> state != null)
+				.toList();
 		return new TopicSummaryResponse(
 				topic.getId(),
 				topic.getDomain().getId(),
@@ -348,6 +473,9 @@ public class TopicService {
 				topic.getNewExpansionLimit(),
 				points.size(),
 				aggregate.coveredCount(),
+				states.size(),
+				states.stream().filter(state -> state.getStatus() == UserReviewUnitStatus.PENDING_FIRST_REVIEW).count(),
+				states.stream().filter(state -> state.getFirstReviewedAt() != null).count(),
 				aggregate.averageMastery(),
 				aggregate.nextReviewAt(),
 				aggregate.weakPointSummary());
@@ -465,6 +593,18 @@ public class TopicService {
 					"围绕「" + resolvedTitle + "」追问机制、边界和生产排查。");
 		}
 
+		QuestionVariant toQuestionVariant(Topic topic, ReviewPoint reviewUnit) {
+			String resolvedTitle = resolvedTitle(topic);
+			return new QuestionVariant(
+					reviewUnit,
+					resolvedTitle,
+					"请围绕「" + topic.getTitle() + " / " + reviewUnit.getTitle() + "」考察「" + resolvedTitle
+							+ "」。要求回答核心机制、关键边界和生产证据。",
+					resolvedTitle,
+					difficulty,
+					variantType(resolvedTitle));
+		}
+
 		String resolvedTitle(Topic topic) {
 			return title.contains("%s") ? title.formatted(topic.getTitle()) : title;
 		}
@@ -477,6 +617,22 @@ public class TopicService {
 				return AutoPlanTier.CORE;
 			}
 			return AutoPlanTier.EXPAND;
+		}
+
+		private static QuestionVariantType variantType(String title) {
+			if (title.contains("生产") || title.contains("排查") || title.contains("故障") || title.contains("慢 SQL")) {
+				return QuestionVariantType.TROUBLESHOOTING;
+			}
+			if (title.contains("对比") || title.contains("取舍") || title.contains("反例")) {
+				return QuestionVariantType.COMPARISON;
+			}
+			if (title.contains("边界") || title.contains("失效") || title.contains("可靠性") || title.contains("场景")) {
+				return QuestionVariantType.SCENARIO;
+			}
+			if (title.contains("表达")) {
+				return QuestionVariantType.EXPANSION;
+			}
+			return QuestionVariantType.CORE_DIAGNOSTIC;
 		}
 	}
 }

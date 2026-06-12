@@ -93,7 +93,11 @@ export function ScopePage() {
     }) => updateTopicSelection(id, selected),
     onSuccess: async (topic) => {
       setSelectedTopicId(topic.id)
-      await queryClient.invalidateQueries({ queryKey: topicsQueryKey })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: topicsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: reviewUnitsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: todayQueueQueryKey }),
+      ])
     },
   })
 
@@ -106,7 +110,11 @@ export function ScopePage() {
       selected: boolean
     }) => updateTopicSelections(topicIds, selected),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: topicsQueryKey })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: topicsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: reviewUnitsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: todayQueueQueryKey }),
+      ])
     },
   })
 
@@ -117,6 +125,7 @@ export function ScopePage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: topicsQueryKey }),
         queryClient.invalidateQueries({ queryKey: reviewUnitsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: todayQueueQueryKey }),
       ])
     },
   })
@@ -132,6 +141,7 @@ export function ScopePage() {
     onSuccess: async (data) => {
       setSelectedTopicId(data.topicId)
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: topicsQueryKey }),
         queryClient.invalidateQueries({ queryKey: reviewUnitsQueryKey }),
         queryClient.invalidateQueries({ queryKey: todayQueueQueryKey }),
       ])
@@ -145,7 +155,11 @@ export function ScopePage() {
       setNewTopicTitle('')
       setSelectedTopicId(topic.id)
       setActiveDomainId(topic.domainId)
-      await queryClient.invalidateQueries({ queryKey: topicsQueryKey })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: topicsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: reviewUnitsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: todayQueueQueryKey }),
+      ])
     },
   })
 
@@ -522,13 +536,12 @@ function TopicRow({
             >
               {tierLabel(topic.relevanceTier)}
             </span>
+            <ScopeStateTags topic={topic} />
           </div>
           <div className="mt-1 truncate text-xs text-slate-500">
             {topic.weakPointSummary.length > 0
               ? topic.weakPointSummary.join(' / ')
-              : topic.selected
-                ? '已标记为正在学'
-                : '未标记学习范围'}
+              : scopeSummary(topic)}
           </div>
         </button>
       </div>
@@ -541,6 +554,47 @@ function TopicRow({
       </div>
     </div>
   )
+}
+
+function ScopeStateTags({ topic }: { topic: TopicSummary }) {
+  if (topic.reviewedReviewUnitCount > 0) {
+    return (
+      <span className="rounded bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-700">
+        已首考 {topic.reviewedReviewUnitCount}
+      </span>
+    )
+  }
+  if (topic.pendingFirstReviewUnitCount > 0) {
+    return (
+      <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700">
+        待首考 {topic.pendingFirstReviewUnitCount}
+      </span>
+    )
+  }
+  if (topic.admittedReviewUnitCount > 0) {
+    return (
+      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700">
+        已纳入 {topic.admittedReviewUnitCount}
+      </span>
+    )
+  }
+  return null
+}
+
+function scopeSummary(topic: TopicSummary) {
+  if (topic.reviewedReviewUnitCount > 0 && !topic.selected) {
+    return '已首考，复习记录保留'
+  }
+  if (topic.reviewedReviewUnitCount > 0) {
+    return '已首考，按复习计划继续'
+  }
+  if (topic.pendingFirstReviewUnitCount > 0) {
+    return '已纳入今日待首考'
+  }
+  if (topic.selected) {
+    return '已标记为正在学'
+  }
+  return '未标记学习范围'
 }
 
 function TopicDetailPanel({
@@ -596,11 +650,22 @@ function TopicDetailPanel({
         </span>
       </div>
 
-      <div className="mt-5 grid grid-cols-3 gap-3">
+      <div className="mt-5 grid grid-cols-2 gap-3">
         <PanelMetric label="单元" value={String(reviewUnits?.totalCount ?? topic.reviewPointCount)} />
-        <PanelMetric label="已纳入" value={String(reviewUnits?.admittedCount ?? 0)} />
-        <PanelMetric label="待首考" value={String(reviewUnits?.pendingFirstReviewCount ?? 0)} />
+        <PanelMetric label="题目变体" value={String(reviewUnits?.questionVariantCount ?? 0)} />
+        <PanelMetric label="已纳入" value={String(topic.admittedReviewUnitCount)} />
+        <PanelMetric label="已首考" value={String(topic.reviewedReviewUnitCount)} />
       </div>
+      {topic.pendingFirstReviewUnitCount > 0 ? (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {topic.pendingFirstReviewUnitCount} 个单元已进入待首考，会出现在今日复习中。
+        </div>
+      ) : null}
+      {!topic.selected && topic.reviewedReviewUnitCount > 0 ? (
+        <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          该主题已取消学习范围，但已首考记录会保留，并按复习计划继续复验。
+        </div>
+      ) : null}
 
       <div className="mt-5 space-y-3">
         <button
@@ -625,7 +690,7 @@ function TopicDetailPanel({
         </button>
 
         <button
-          disabled={admitPending || reviewUnitsLoading || unadmittedUnits.length === 0}
+          disabled={admitPending || reviewUnitsLoading || !topic.selected || unadmittedUnits.length === 0}
           type="button"
           onClick={() => onAdmit(topic)}
           className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-emerald-700 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
@@ -635,7 +700,7 @@ function TopicDetailPanel({
           ) : (
             <Plus className="size-4" aria-hidden="true" />
           )}
-          纳入未纳入单元
+          修复未纳入单元
         </button>
 
         <button
@@ -660,7 +725,7 @@ function TopicDetailPanel({
             <Loader2 className="size-4 animate-spin text-slate-400" aria-hidden="true" />
           ) : (
             <span className="text-xs text-slate-500">
-              {reviewUnits?.admittedCount ?? 0}/{reviewUnits?.totalCount ?? topic.reviewPointCount}
+              {topic.admittedReviewUnitCount}/{reviewUnits?.totalCount ?? topic.reviewPointCount}
             </span>
           )}
         </div>
@@ -679,6 +744,7 @@ function TopicDetailPanel({
               <ReviewUnitRow
                 key={unit.reviewUnitId}
                 admitPending={admitPending}
+                topicSelected={topic.selected}
                 unit={unit}
                 onAdmit={() => onAdmit(topic, [unit.reviewUnitId])}
               />
@@ -702,10 +768,12 @@ function TopicDetailPanel({
 function ReviewUnitRow({
   admitPending,
   onAdmit,
+  topicSelected,
   unit,
 }: {
   admitPending: boolean
   onAdmit: () => void
+  topicSelected: boolean
   unit: ReviewUnitSummary
 }) {
   return (
@@ -726,10 +794,13 @@ function ReviewUnitRow({
             <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
               高频 {unit.interviewFrequency}
             </span>
+            <span className="rounded bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-700">
+              变体 {unit.questionVariantCount}
+            </span>
           </div>
         </div>
 
-        {!unit.stateId ? (
+        {!unit.stateId && topicSelected ? (
           <button
             type="button"
             disabled={admitPending}

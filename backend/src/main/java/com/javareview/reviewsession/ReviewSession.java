@@ -20,6 +20,7 @@ import org.hibernate.type.SqlTypes;
 
 import com.javareview.auth.User;
 import com.javareview.reviewpoint.ReviewPoint;
+import com.javareview.reviewunit.QuestionVariant;
 import com.javareview.reviewunit.UserReviewUnitState;
 
 @Entity
@@ -36,6 +37,10 @@ public class ReviewSession {
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "review_unit_state_id", nullable = false)
 	private UserReviewUnitState reviewUnitState;
+
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "question_variant_id")
+	private QuestionVariant questionVariant;
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 32)
@@ -64,9 +69,14 @@ public class ReviewSession {
 	}
 
 	public ReviewSession(User user, UserReviewUnitState reviewUnitState, Instant startedAt) {
+		this(user, reviewUnitState, null, startedAt);
+	}
+
+	public ReviewSession(User user, UserReviewUnitState reviewUnitState, QuestionVariant questionVariant, Instant startedAt) {
 		this.id = UUID.randomUUID();
 		this.user = user;
 		this.reviewUnitState = reviewUnitState;
+		this.questionVariant = questionVariant;
 		this.startedAt = startedAt;
 	}
 
@@ -89,6 +99,10 @@ public class ReviewSession {
 
 	public ReviewPoint getReviewUnit() {
 		return reviewUnitState.getReviewUnit();
+	}
+
+	public QuestionVariant getQuestionVariant() {
+		return questionVariant;
 	}
 
 	public ReviewSessionStatus getStatus() {

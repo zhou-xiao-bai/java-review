@@ -43,6 +43,9 @@ public final class TopicDtos {
 			int newExpansionLimit,
 			long reviewPointCount,
 			long coveredReviewPointCount,
+			long admittedReviewUnitCount,
+			long pendingFirstReviewUnitCount,
+			long reviewedReviewUnitCount,
 			BigDecimal averageMastery,
 			Instant nextReviewAt,
 			List<String> weakPointSummary) {

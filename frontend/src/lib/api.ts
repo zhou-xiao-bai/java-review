@@ -146,6 +146,9 @@ export type TopicSummary = {
   newExpansionLimit: number
   reviewPointCount: number
   coveredReviewPointCount: number
+  admittedReviewUnitCount: number
+  pendingFirstReviewUnitCount: number
+  reviewedReviewUnitCount: number
   averageMastery: number
   nextReviewAt: string | null
   weakPointSummary: string[]
@@ -235,6 +238,7 @@ export type ReviewUnitSummary = {
   importance: number
   difficulty: number
   interviewFrequency: number
+  questionVariantCount: number
   autoPlanTier: 'CORE' | 'EXPAND' | 'OPTIONAL' | string
   mastery: number
   pointStatus: string
@@ -256,6 +260,7 @@ export type ReviewUnitsResponse = {
   topicTitle: string
   domainName: string
   totalCount: number
+  questionVariantCount: number
   admittedCount: number
   pendingFirstReviewCount: number
   activeCount: number
@@ -452,6 +457,8 @@ export type ReviewSession = {
   id: string
   reviewUnitStateId: string
   reviewUnitId: string
+  questionVariantId: string | null
+  questionVariantTitle: string | null
   status: 'active' | 'evaluated' | 'abandoned' | string
   topicTitle: string | null
   pointTitle: string | null

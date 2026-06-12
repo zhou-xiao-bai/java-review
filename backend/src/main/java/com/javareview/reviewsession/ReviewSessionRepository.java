@@ -17,6 +17,7 @@ public interface ReviewSessionRepository extends JpaRepository<ReviewSession, UU
 			join fetch state.reviewUnit point
 			join fetch point.topic topic
 			join fetch topic.domain domain
+			left join fetch session.questionVariant variant
 			where session.id = :id
 			and session.user.id = :userId
 			""")
@@ -31,6 +32,7 @@ public interface ReviewSessionRepository extends JpaRepository<ReviewSession, UU
 			join fetch state.reviewUnit point
 			join fetch point.topic topic
 			join fetch topic.domain domain
+			left join fetch session.questionVariant variant
 			where state.id = :stateId
 			and session.user.id = :userId
 			and session.status = com.javareview.reviewsession.ReviewSessionStatus.ACTIVE
@@ -47,6 +49,7 @@ public interface ReviewSessionRepository extends JpaRepository<ReviewSession, UU
 			join fetch state.reviewUnit point
 			join fetch point.topic topic
 			join fetch topic.domain domain
+			left join fetch session.questionVariant variant
 			where session.user.id = :userId
 			order by session.startedAt desc
 			""")

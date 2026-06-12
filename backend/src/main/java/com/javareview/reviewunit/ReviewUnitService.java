@@ -30,16 +30,19 @@ public class ReviewUnitService {
 
 	private final TopicRepository topicRepository;
 	private final ReviewPointRepository reviewPointRepository;
+	private final QuestionVariantRepository questionVariantRepository;
 	private final UserReviewUnitStateRepository stateRepository;
 	private final Clock clock;
 
 	public ReviewUnitService(
 			TopicRepository topicRepository,
 			ReviewPointRepository reviewPointRepository,
+			QuestionVariantRepository questionVariantRepository,
 			UserReviewUnitStateRepository stateRepository,
 			Clock clock) {
 		this.topicRepository = topicRepository;
 		this.reviewPointRepository = reviewPointRepository;
+		this.questionVariantRepository = questionVariantRepository;
 		this.stateRepository = stateRepository;
 		this.clock = clock;
 	}
@@ -108,14 +111,16 @@ public class ReviewUnitService {
 
 	private ReviewUnitsResponse toResponse(User user, Topic topic, List<ReviewPoint> units) {
 		Map<UUID, UserReviewUnitState> statesByUnitId = statesByUnitId(user.getId(), units);
+		Map<UUID, Long> variantCountsByUnitId = variantCountsByUnitId(units);
 		List<ReviewUnitSummaryResponse> unitResponses = units.stream()
-				.map(unit -> toUnitResponse(unit, statesByUnitId.get(unit.getId())))
+				.map(unit -> toUnitResponse(unit, statesByUnitId.get(unit.getId()), variantCountsByUnitId.getOrDefault(unit.getId(), 0L)))
 				.toList();
 		return new ReviewUnitsResponse(
 				topic.getId(),
 				topic.getTitle(),
 				topic.getDomain().getName(),
 				units.size(),
+				unitResponses.stream().mapToLong(ReviewUnitSummaryResponse::questionVariantCount).sum(),
 				unitResponses.stream().filter(unit -> unit.stateId() != null).count(),
 				unitResponses.stream().filter(unit -> unit.stateStatus() != null
 						&& unit.stateStatus().equals(UserReviewUnitStatus.PENDING_FIRST_REVIEW.name())).count(),
@@ -134,13 +139,26 @@ public class ReviewUnitService {
 				.collect(Collectors.toMap(state -> state.getReviewUnit().getId(), Function.identity()));
 	}
 
-	private ReviewUnitSummaryResponse toUnitResponse(ReviewPoint unit, UserReviewUnitState state) {
+	private Map<UUID, Long> variantCountsByUnitId(Collection<ReviewPoint> units) {
+		if (units.isEmpty()) {
+			return Map.of();
+		}
+		List<UUID> unitIds = units.stream().map(ReviewPoint::getId).toList();
+		return questionVariantRepository.countEnabledByReviewUnitIds(unitIds)
+				.stream()
+				.collect(Collectors.toMap(
+						QuestionVariantRepository.ReviewUnitVariantCount::getReviewUnitId,
+						QuestionVariantRepository.ReviewUnitVariantCount::getVariantCount));
+	}
+
+	private ReviewUnitSummaryResponse toUnitResponse(ReviewPoint unit, UserReviewUnitState state, long questionVariantCount) {
 		return new ReviewUnitSummaryResponse(
 				unit.getId(),
 				unit.getTitle(),
 				unit.getImportance(),
 				unit.getDifficulty(),
 				unit.getInterviewFrequency(),
+				questionVariantCount,
 				unit.getAutoPlanTier().name(),
 				unit.getMastery(),
 				unit.getStatus().name(),

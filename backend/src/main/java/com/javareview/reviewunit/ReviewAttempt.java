@@ -38,6 +38,10 @@ public class ReviewAttempt {
 	@JoinColumn(name = "review_session_id")
 	private ReviewSession reviewSession;
 
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "question_variant_id")
+	private QuestionVariant questionVariant;
+
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 32)
 	private ReviewAttemptSource source;
@@ -70,10 +74,24 @@ public class ReviewAttempt {
 			BigDecimal score,
 			Instant attemptedAt,
 			String note) {
+		this(user, reviewUnit, reviewSession, null, source, result, score, attemptedAt, note);
+	}
+
+	public ReviewAttempt(
+			User user,
+			ReviewPoint reviewUnit,
+			ReviewSession reviewSession,
+			QuestionVariant questionVariant,
+			ReviewAttemptSource source,
+			ReviewAttemptResult result,
+			BigDecimal score,
+			Instant attemptedAt,
+			String note) {
 		this.id = UUID.randomUUID();
 		this.user = user;
 		this.reviewUnit = reviewUnit;
 		this.reviewSession = reviewSession;
+		this.questionVariant = questionVariant;
 		this.source = source;
 		this.result = result;
 		this.score = score;
@@ -84,5 +102,9 @@ public class ReviewAttempt {
 	@PrePersist
 	void prePersist() {
 		this.createdAt = Instant.now();
+	}
+
+	public QuestionVariant getQuestionVariant() {
+		return questionVariant;
 	}
 }

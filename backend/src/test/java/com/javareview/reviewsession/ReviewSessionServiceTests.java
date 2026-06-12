@@ -37,6 +37,9 @@ import com.javareview.reviewpoint.ReviewWeaknessEventRepository;
 import com.javareview.settings.SettingsService;
 import com.javareview.settings.UserSettings;
 import com.javareview.today.ReviewPriorityService;
+import com.javareview.reviewunit.QuestionVariant;
+import com.javareview.reviewunit.QuestionVariantSelectionService;
+import com.javareview.reviewunit.QuestionVariantType;
 import com.javareview.reviewunit.ReviewAttemptRepository;
 import com.javareview.reviewunit.ReviewAttemptResult;
 import com.javareview.reviewunit.TodayReviewAction;
@@ -56,6 +59,9 @@ class ReviewSessionServiceTests {
 
 	@Mock
 	private UserReviewUnitStateRepository reviewUnitStateRepository;
+
+	@Mock
+	private QuestionVariantSelectionService questionVariantSelectionService;
 
 	@Mock
 	private ReviewAttemptRepository reviewAttemptRepository;
@@ -88,6 +94,7 @@ class ReviewSessionServiceTests {
 	void setUp() {
 		reviewSessionService = new ReviewSessionService(
 				reviewUnitStateRepository,
+				questionVariantSelectionService,
 				reviewAttemptRepository,
 				todayReviewActionRepository,
 				reviewSessionRepository,
@@ -109,6 +116,7 @@ class ReviewSessionServiceTests {
 	@Test
 	void startGeneratesInitialQuestionFromReviewPointWithLlm() {
 		when(reviewUnitStateRepository.findByIdAndUserIdWithUnit(state.getId(), user.getId())).thenReturn(Optional.of(state));
+		when(questionVariantSelectionService.selectFor(user, point)).thenReturn(Optional.empty());
 		when(reviewSessionRepository.save(any(ReviewSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(reviewTurnRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(any())).thenAnswer(invocation -> List.of(new ReviewTurn(new ReviewSession(user, state, NOW), ReviewTurnRole.AI, ReviewTurnType.QUESTION, "事务代理在什么情况下会失效？")));
@@ -124,8 +132,40 @@ class ReviewSessionServiceTests {
 	}
 
 	@Test
+	void startSelectsQuestionVariantAndStoresItOnSession() {
+		QuestionVariant variant = new QuestionVariant(
+				point,
+				"self-invocation 场景题",
+				"请分析 self-invocation 为什么会导致事务代理失效。",
+				"验证代理调用链路和自调用边界",
+				4,
+				QuestionVariantType.SCENARIO);
+		when(reviewUnitStateRepository.findByIdAndUserIdWithUnit(state.getId(), user.getId())).thenReturn(Optional.of(state));
+		when(questionVariantSelectionService.selectFor(user, point)).thenReturn(Optional.of(variant));
+		when(reviewSessionRepository.save(any(ReviewSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+		when(reviewTurnRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+		when(reviewTurnRepository.findBySessionIdOrderByCreatedAtAsc(any())).thenReturn(List.of(new ReviewTurn(new ReviewSession(user, state, variant, NOW), ReviewTurnRole.AI, ReviewTurnType.QUESTION, "请分析 self-invocation 为什么会导致事务代理失效。")));
+		UserSettings settings = new UserSettings(user);
+		when(settingsService.findOrDefault(user)).thenReturn(settings);
+		when(llmClient.complete(eq(settings), any(), any())).thenReturn(LlmResult.success("请分析 self-invocation 为什么会导致事务代理失效。"));
+
+		var response = reviewSessionService.start(user, new ReviewSessionDtos.StartReviewSessionRequest(state.getId()));
+
+		ArgumentCaptor<ReviewSession> sessionCaptor = ArgumentCaptor.forClass(ReviewSession.class);
+		verify(reviewSessionRepository).save(sessionCaptor.capture());
+		assertThat(sessionCaptor.getValue().getQuestionVariant()).isSameAs(variant);
+		assertThat(response.questionVariantId()).isEqualTo(variant.getId());
+		assertThat(response.questionVariantTitle()).isEqualTo("self-invocation 场景题");
+		verify(llmClient).complete(
+				eq(settings),
+				any(),
+				org.mockito.ArgumentMatchers.contains("题目变体：self-invocation 场景题"));
+	}
+
+	@Test
 	void startFailsWhenLlmDoesNotGenerateQuestion() {
 		when(reviewUnitStateRepository.findByIdAndUserIdWithUnit(state.getId(), user.getId())).thenReturn(Optional.of(state));
+		when(questionVariantSelectionService.selectFor(user, point)).thenReturn(Optional.empty());
 		when(reviewSessionRepository.save(any(ReviewSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		UserSettings settings = new UserSettings(user);
 		when(settingsService.findOrDefault(user)).thenReturn(settings);

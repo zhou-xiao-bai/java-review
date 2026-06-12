@@ -32,6 +32,8 @@ public final class ReviewSessionDtos {
 			UUID id,
 			UUID reviewUnitStateId,
 			UUID reviewUnitId,
+			UUID questionVariantId,
+			String questionVariantTitle,
 			String status,
 			String topicTitle,
 			String pointTitle,

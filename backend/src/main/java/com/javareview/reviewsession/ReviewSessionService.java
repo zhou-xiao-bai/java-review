@@ -25,6 +25,8 @@ import com.javareview.reviewpoint.ReviewPoint;
 import com.javareview.reviewpoint.ReviewPointStatus;
 import com.javareview.reviewpoint.ReviewWeaknessEvent;
 import com.javareview.reviewpoint.ReviewWeaknessEventRepository;
+import com.javareview.reviewunit.QuestionVariant;
+import com.javareview.reviewunit.QuestionVariantSelectionService;
 import com.javareview.reviewunit.ReviewAttempt;
 import com.javareview.reviewunit.ReviewAttemptRepository;
 import com.javareview.reviewunit.ReviewAttemptResult;
@@ -60,6 +62,7 @@ public class ReviewSessionService {
 	private static final BigDecimal NEAR_PERFECT_SCORE_THRESHOLD = BigDecimal.valueOf(4.8);
 
 	private final UserReviewUnitStateRepository reviewUnitStateRepository;
+	private final QuestionVariantSelectionService questionVariantSelectionService;
 	private final ReviewAttemptRepository reviewAttemptRepository;
 	private final TodayReviewActionRepository todayReviewActionRepository;
 	private final ReviewSessionRepository reviewSessionRepository;
@@ -73,6 +76,7 @@ public class ReviewSessionService {
 
 	public ReviewSessionService(
 			UserReviewUnitStateRepository reviewUnitStateRepository,
+			QuestionVariantSelectionService questionVariantSelectionService,
 			ReviewAttemptRepository reviewAttemptRepository,
 			TodayReviewActionRepository todayReviewActionRepository,
 			ReviewSessionRepository reviewSessionRepository,
@@ -84,6 +88,7 @@ public class ReviewSessionService {
 			ReviewPriorityService reviewPriorityService,
 			Clock clock) {
 		this.reviewUnitStateRepository = reviewUnitStateRepository;
+		this.questionVariantSelectionService = questionVariantSelectionService;
 		this.reviewAttemptRepository = reviewAttemptRepository;
 		this.todayReviewActionRepository = todayReviewActionRepository;
 		this.reviewSessionRepository = reviewSessionRepository;
@@ -106,8 +111,12 @@ public class ReviewSessionService {
 		if (!activeSessions.isEmpty()) {
 			return toResponse(activeSessions.getFirst());
 		}
-		ReviewSession session = reviewSessionRepository.save(new ReviewSession(user, state, Instant.now(clock)));
-		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION, generateInitialQuestion(user, state.getReviewUnit())));
+		QuestionVariant questionVariant = questionVariantSelectionService
+				.selectFor(user, state.getReviewUnit())
+				.orElse(null);
+		ReviewSession session = reviewSessionRepository.save(new ReviewSession(user, state, questionVariant, Instant.now(clock)));
+		reviewTurnRepository.save(new ReviewTurn(session, ReviewTurnRole.AI, ReviewTurnType.QUESTION,
+				generateInitialQuestion(user, state.getReviewUnit(), questionVariant)));
 		return toResponse(session);
 	}
 
@@ -205,6 +214,7 @@ public class ReviewSessionService {
 				session.getUser(),
 				point,
 				session,
+				session.getQuestionVariant(),
 				ReviewAttemptSource.REVIEW_SESSION,
 				result,
 				evaluation.score().overall(),
@@ -244,6 +254,8 @@ public class ReviewSessionService {
 				session.getId(),
 				session.getReviewUnitState().getId(),
 				point.getId(),
+				session.getQuestionVariant() == null ? null : session.getQuestionVariant().getId(),
+				session.getQuestionVariant() == null ? null : session.getQuestionVariant().getTitle(),
 				session.getStatus().name().toLowerCase(Locale.ROOT),
 				point.getTopic().getTitle(),
 				point.getTitle(),
@@ -1374,11 +1386,14 @@ public class ReviewSessionService {
 		};
 	}
 
-	private String generateInitialQuestion(User user, ReviewPoint point) {
+	private String generateInitialQuestion(User user, ReviewPoint point, QuestionVariant variant) {
 		UserSettings settings = settingsService.findOrDefault(user);
-		LlmResult result = llmClient.complete(settings, questionSystemPrompt(), questionPrompt(point));
+		LlmResult result = llmClient.complete(settings, questionSystemPrompt(), questionPrompt(point, variant));
 		if (result.content() != null && !result.content().isBlank()) {
 			return result.content().trim();
+		}
+		if (variant != null && variant.getPrompt() != null && !variant.getPrompt().isBlank()) {
+			return variant.getPrompt().trim();
 		}
 		throw new IllegalStateException("AI 题目生成失败：" + (result.errorMessage() == null ? "LLM 未返回有效题目。" : result.errorMessage()));
 	}
@@ -1396,11 +1411,11 @@ public class ReviewSessionService {
 	}
 
 	private static String questionSystemPrompt() {
-		return "你是严格的高级 Java 面试官。根据复习点实时生成一道题，只输出题目本身，不输出参考答案、评分标准或解释。题目必须具体、可回答、能暴露机制理解和生产经验。";
+		return "你是严格的高级 Java 面试官。根据复习单元和题目变体生成一道题，只输出题目本身，不输出参考答案、评分标准或解释。题目必须具体、可回答、能暴露机制理解和生产经验。";
 	}
 
-	private static String questionPrompt(ReviewPoint point) {
-		return "主题：" + point.getTopic().getTitle()
+	private static String questionPrompt(ReviewPoint point, QuestionVariant variant) {
+		String base = "主题：" + point.getTopic().getTitle()
 				+ "\n复习点：" + point.getTitle()
 				+ "\n重要度：" + point.getImportance()
 				+ "\n难度：" + point.getDifficulty()
@@ -1408,8 +1423,17 @@ public class ReviewSessionService {
 				+ "\n当前掌握分：" + point.getMastery()
 				+ "\n当前状态：" + point.getStatus()
 				+ "\n历史弱点：" + (point.getWeakPoints().isEmpty() ? "暂无" : String.join("；", point.getWeakPoints()))
-				+ "\n下次考察方向：" + (point.getNextProbe() == null || point.getNextProbe().isBlank() ? "暂无" : point.getNextProbe())
-				+ "\n请生成一道针对这个复习点的实时面试题。";
+				+ "\n下次考察方向：" + (point.getNextProbe() == null || point.getNextProbe().isBlank() ? "暂无" : point.getNextProbe());
+		if (variant == null) {
+			return base + "\n请生成一道针对这个复习点的实时面试题。";
+		}
+		return base
+				+ "\n题目变体：" + variant.getTitle()
+				+ "\n变体类型：" + variant.getVariantType()
+				+ "\n变体难度：" + variant.getDifficulty()
+				+ "\n变体焦点：" + (variant.getFocus() == null || variant.getFocus().isBlank() ? "暂无" : variant.getFocus())
+				+ "\n变体原题：" + variant.getPrompt()
+				+ "\n请优先围绕这个题目变体出题。可以轻微改写题干，但不能换掉考察目标。";
 	}
 
 	private static String clarifySystemPrompt() {
@@ -1426,6 +1450,7 @@ public class ReviewSessionService {
 				请根据完整对话判断用户对当前复习点的掌握程度。
 
 				复习点：%s
+				题目变体：%s
 				已追问次数：%d
 				最多追问次数：%d
 				历史对话：
@@ -1479,6 +1504,7 @@ public class ReviewSessionService {
 				10. nextProbe 和 masteryCard.nextProbe 必须是“考察方向”，不能是固定下次追问题目，不能以“请/为什么/如何/说明”开头。
 				""".formatted(
 						sessionTitle(session),
+						sessionVariantContext(session),
 						followUpCount,
 						maxFollowUps,
 						transcript(turns),
@@ -1490,6 +1516,7 @@ public class ReviewSessionService {
 				用户在当前复习点明确表示不会作答。请直接生成一次低分收口复盘，用于前端展示“本题判定、纠错与正确答案、复习记录”。
 
 				复习点：%s
+				题目变体：%s
 				用户证据：%s
 				历史对话：
 				%s
@@ -1527,12 +1554,13 @@ public class ReviewSessionService {
 				5. 所有分数必须在 0 到 2 之间，nextStatus 必须是 unstable。
 				6. corrections 必须非空，每个条目都要把用户没答出的缺口和正确说法配对，不能只说“参考 referenceAnswer”。
 				7. nextProbe 和 masteryCard.nextProbe 必须是考察方向，不是固定下次追问题目，不能以“请/为什么/如何/说明”开头。
-				""".formatted(sessionTitle(session), evidence, transcript(turns));
+				""".formatted(sessionTitle(session), sessionVariantContext(session), evidence, transcript(turns));
 	}
 
 	private static String clarifyPrompt(ReviewSession session, String question) {
 		return """
 				复习点：%s
+				题目变体：%s
 				用户的题意追问：%s
 
 				请用 3 到 5 行解释：
@@ -1541,7 +1569,17 @@ public class ReviewSessionService {
 				3. 推荐回答顺序。
 
 				不要给标准答案，不要展开具体结论。
-				""".formatted(sessionTitle(session), question);
+				""".formatted(sessionTitle(session), sessionVariantContext(session), question);
+	}
+
+	private static String sessionVariantContext(ReviewSession session) {
+		QuestionVariant variant = session.getQuestionVariant();
+		if (variant == null) {
+			return "无固定变体，按复习点实时生成";
+		}
+		return variant.getTitle()
+				+ "；焦点：" + (variant.getFocus() == null || variant.getFocus().isBlank() ? "暂无" : variant.getFocus())
+				+ "；原题：" + variant.getPrompt();
 	}
 
 	private static String transcript(List<ReviewTurn> turns) {
